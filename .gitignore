@@ -1,0 +1,7 @@
+.DS_Store
+server/apps
+build
+node_modules
+server/funfo.db
+server/funfo.db-shm
+server/funfo.db-wal
