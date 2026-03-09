@@ -48,6 +48,8 @@
    OPENCLAW_TOKEN=<你的 OpenClaw token>
    # 外网通过 Nginx 访问时，HMR WebSocket 需用公网 host（否则浏览器会连 localhost 失败）
    VITE_HMR_HOST=ec2-18-183-255-142.ap-northeast-1.compute.amazonaws.com
+   # （可选）若不需要热更新（只是对外提供可用页面），可禁用 HMR，避免控制台 WebSocket 报错
+   VITE_DISABLE_HMR=1
    # 预览/分享链接的公网 base（与浏览器访问一致，如 http://ec2-xxx 或 https://域名）
    PUBLIC_BASE_URL=http://ec2-18-183-255-142.ap-northeast-1.compute.amazonaws.com
    ```
@@ -129,3 +131,60 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
    - 正常：`{"ok":true,"urlMasked":"http://...","status":200,"message":"OpenClaw 正常 (响应长度 4)","responseLength":4}`
    - 不可达：`{"ok":false,"urlMasked":"...","status":0,"message":"fetch failed ..."}`  
    可根据 `ok`、`status`、`message` 判断 OpenClaw 是否可达。
+
+3. **若返回 `ok: false` 且 urlMasked 为 `127.0.0.1`**  
+   说明容器内请求的是本机（容器内回环），而 OpenClaw 在**宿主机**上，所以会 `fetch failed`。  
+   **处理**：在 EC2 项目根目录的 `.env` 中设置（不要用 127.0.0.1）：
+   ```bash
+   OPENCLAW_URL=http://host.docker.internal:18789/v1/chat/completions
+   OPENCLAW_TOKEN=<你的 token>
+   ```
+   保存后执行 `./scripts/update-and-restart.sh` 或 `docker compose -f docker-compose.yml -f docker-compose.ec2.yml up -d` 重启。  
+   再确认宿主机上 OpenClaw 已监听 18789（如 `curl -s http://127.0.0.1:18789/...` 在宿主机上可通）。
+
+4. **宿主机上 curl 127.0.0.1:18789 返回 405，但 openclaw-ping 仍 `fetch failed`（urlMasked 已是 host.docker.internal）**  
+   说明 OpenClaw 在宿主机正常，但**容器访问宿主机 18789 不通**。常见原因与处理：
+
+   - **OpenClaw 只监听了 127.0.0.1**  
+     容器连的是宿主机网卡 IP（如 Docker 桥或内网 IP），不是宿主机本机回环。需让 OpenClaw 监听 **0.0.0.0:18789**（或至少监听宿主机对 Docker 暴露的地址）。改完重启 OpenClaw 后再测 openclaw-ping。
+
+   - **改用宿主机 IP 直连（不依赖 host.docker.internal）**  
+     在 EC2 上查宿主机内网 IP（如 `hostname -I | awk '{print $1}'` 得到 172.31.x.x），在 `.env` 里设：
+     ```bash
+     OPENCLAW_URL=http://172.31.43.79:18789/v1/chat/completions
+     ```
+     把 `172.31.43.79` 换成你本机查到的 IP。重启容器后再测 openclaw-ping。
+
+   - **宿主机防火墙**  
+     若开了 ufw，需放行 Docker 网段访问 18789，例如：
+     ```bash
+     sudo ufw allow from 172.17.0.0/16 to any port 18789
+     sudo ufw reload
+     ```
+
+5. **`ss -tlnp | grep 18789` 显示只监听 127.0.0.1:18789（或 [::1]:18789）**  
+   说明 OpenClaw 只接受本机回环，**容器从宿主机 IP（如 172.31.x.x）访问会连不上**。  
+   **处理**：把 OpenClaw 改为监听 **0.0.0.0:18789**。若使用 OpenClaw 的配置文件，将 `gateway` 中 **`bind` 改为 `"lan"`**，并增加 **`controlUi.allowedOrigins`**（以便控制台/UI 可从指定来源访问）。示例：
+
+   ```json
+   "gateway": {
+     "port": 18789,
+     "mode": "local",
+     "bind": "lan",
+     "auth": {
+       "mode": "token",
+       "token": "<你的 token，与 funfo .env 中 OPENCLAW_TOKEN 一致>"
+     },
+     "controlUi": {
+       "allowedOrigins": [
+         "http://localhost:18789",
+         "http://127.0.0.1:18789",
+         "http://172.31.43.79:18789"
+       ]
+     }
+   }
+   ```
+
+   - 将 `172.31.43.79` 换成你 EC2 的内网 IP（`hostname -I | awk '{print $1}'`）。
+   - 若需通过公网域名访问 OpenClaw 控制台，在 `allowedOrigins` 中追加对应来源（如 `"http://ec2-xxx.compute.amazonaws.com"`）。
+   - 保存后重启 OpenClaw，用 `sudo ss -tlnp | grep 18789` 确认出现 `0.0.0.0:18789`，再测 openclaw-ping。

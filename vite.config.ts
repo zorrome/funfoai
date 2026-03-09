@@ -56,10 +56,15 @@
       port: 3000,
       host: '0.0.0.0',   // 允许局域网/外网访问
       allowedHosts: true, // 允许通过 EC2 主机名或自定义域名访问（否则 Vite 会 Blocked request）
-      // 外网通过 Nginx 80 访问时，HMR 必须走 80 端口（由 Nginx 反代到 5175），否则安全组未开 5175 会连不上
-      hmr: process.env.VITE_HMR_HOST
-        ? { host: process.env.VITE_HMR_HOST, port: 80, clientPort: 80 }
-        : true,
+      // 外网通过 Nginx 80/443 访问时：
+      // - 浏览器侧 WebSocket 只能走 80/443（安全组不开放 5175）
+      // - 但 Vite 服务端仍监听自身端口（在 Dockerfile 里实际是 5175）
+      // 因此这里只设置 clientPort，让浏览器连 80，由 Nginx 反代到 5175。
+      hmr: process.env.VITE_DISABLE_HMR === '1'
+        ? false
+        : (process.env.VITE_HMR_HOST
+            ? { host: process.env.VITE_HMR_HOST, clientPort: 80 }
+            : true),
       open: true,
       watch: {
         ignored: [
