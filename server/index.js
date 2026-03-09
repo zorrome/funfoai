@@ -178,6 +178,20 @@ const DEFAULT_PLAN_QUESTIONNAIRE = [
   { id: 'scope', title: '初期スコープ', options: ['最小限', '標準', 'フル'] },
 ];
 
+const DEFAULT_DESIGN_CONCEPT = 'シンプルで実用的な業務向けUI。カード型レイアウト・控えめな配色・明確な階層を基本とする。';
+const DEFAULT_DESIGN_STYLE_GUIDE = [
+  '主色はスレート系、アクセントは控えめに',
+  '見出し text-xl、本文 text-sm、補足 text-xs',
+  'カードは rounded-xl shadow-sm border',
+  'ボタン h-9、入力 h-9 で密度を統一',
+  '空状態・ローディングを必ず用意',
+];
+const DEFAULT_DESIGN_UI_CHECKLIST = [
+  'カード/ボタン/テーブルの一貫したスタイル',
+  'フォームのバリデーションとエラー表示',
+  'レスポンシブを考慮したレイアウト',
+];
+
 function randomSlug(len = 8) {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let out = '';
@@ -533,12 +547,14 @@ function validateGeneratedArtifacts(frontendCode = '', serverCode = '', sqlCode 
 async function callOpenClawOnce(messages) {
   const timeoutMs = Number(process.env.OPENCLAW_TIMEOUT_MS || '140000');
   const maxAttempts = Number(process.env.OPENCLAW_MAX_RETRY || '2');
+  const urlMasked = OPENCLAW_URL.replace(/\/[^/]*$/, '/...'); // 仅用于日志，不暴露 path 细节
 
   let lastErr = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      if (attempt === 1) console.log(`[OpenClaw] 请求中 ${urlMasked} (timeout=${timeoutMs}ms)`);
       const response = await fetch(OPENCLAW_URL, {
         method: 'POST',
         headers: {
@@ -561,10 +577,12 @@ async function callOpenClawOnce(messages) {
       const json = await response.json();
       const content = json?.choices?.[0]?.message?.content;
       if (!content) throw new Error('Empty model response');
+      console.log(`[OpenClaw] 成功 响应长度=${content.length}`);
       return content;
     } catch (e) {
       lastErr = e;
       const msg = String(e?.message || e || '');
+      console.warn(`[OpenClaw] 尝试 ${attempt}/${maxAttempts} 失败: ${msg.slice(0, 120)}`);
       const retryable = /aborted|timeout|timed out|fetch failed|network|5\d\d/i.test(msg);
       if (!(retryable && attempt < maxAttempts)) break;
       await new Promise(r => setTimeout(r, 800 * attempt));
@@ -574,6 +592,7 @@ async function callOpenClawOnce(messages) {
   }
 
   const m = String(lastErr?.message || lastErr || 'OpenClaw call failed');
+  console.error(`[OpenClaw] 最终失败: ${m.slice(0, 200)}`);
   if (/aborted|timeout|timed out/i.test(m)) {
     throw new Error('模型响应超时（已自动重试），请再试一次或简化一次需求');
   }
@@ -761,6 +780,49 @@ app.get('/api/auth/check-email', (req, res) => {
   res.json({ exists });
 });
 
+// 调试：检测 OpenClaw 是否可达（不暴露 token，仅用于运维排查）
+app.get('/api/debug/openclaw-ping', async (req, res) => {
+  const urlMasked = OPENCLAW_URL.replace(/\/[^/]*$/, '/...');
+  const timeoutMs = 15000;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(OPENCLAW_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENCLAW_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'openclaw',
+        stream: false,
+        messages: [{ role: 'user', content: 'reply with exactly: pong' }],
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const body = await response.text();
+    let contentLength = 0;
+    try {
+      const j = JSON.parse(body);
+      contentLength = (j?.choices?.[0]?.message?.content || '').length;
+    } catch {}
+    res.json({
+      ok: response.ok && contentLength >= 0,
+      urlMasked,
+      status: response.status,
+      message: response.ok ? `OpenClaw 正常 (响应长度 ${contentLength})` : `HTTP ${response.status}: ${body.slice(0, 100)}`,
+      responseLength: contentLength,
+    });
+  } catch (e) {
+    res.json({
+      ok: false,
+      urlMasked,
+      status: 0,
+      message: String(e?.message || e).slice(0, 200),
+    });
+  }
+});
 
 app.post('/api/auth/reset-password', (req, res) => {
   const { token, newPassword } = req.body || {};
@@ -1238,14 +1300,23 @@ Rules:
     let jsonText = raw.trim();
     const m = jsonText.match(/\{[\s\S]*\}/);
     if (m) jsonText = m[0];
-    const d = JSON.parse(jsonText);
+    const d = parseJsonRelaxed(jsonText);
     res.json({
-      concept: String(d?.concept || ''),
-      styleGuide: Array.isArray(d?.styleGuide) ? d.styleGuide.map(x => String(x)).filter(Boolean).slice(0, 10) : [],
-      uiChecklist: Array.isArray(d?.uiChecklist) ? d.uiChecklist.map(x => String(x)).filter(Boolean).slice(0, 10) : [],
+      concept: String(d?.concept || '').trim() || DEFAULT_DESIGN_CONCEPT,
+      styleGuide: Array.isArray(d?.styleGuide) && d.styleGuide.length > 0
+        ? d.styleGuide.map(x => String(x)).filter(Boolean).slice(0, 10)
+        : DEFAULT_DESIGN_STYLE_GUIDE,
+      uiChecklist: Array.isArray(d?.uiChecklist) && d.uiChecklist.length > 0
+        ? d.uiChecklist.map(x => String(x)).filter(Boolean).slice(0, 10)
+        : DEFAULT_DESIGN_UI_CHECKLIST,
     });
   } catch (e) {
-    res.status(500).json({ error: `design brief failed: ${e.message}` });
+    // OpenClaw 超时/网络错误或 JSON 解析失败时返回默认设计概要，流程可继续
+    res.json({
+      concept: DEFAULT_DESIGN_CONCEPT,
+      styleGuide: DEFAULT_DESIGN_STYLE_GUIDE,
+      uiChecklist: DEFAULT_DESIGN_UI_CHECKLIST,
+    });
   }
 });
 

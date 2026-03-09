@@ -108,3 +108,24 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
 - `docker-compose.ec2.yml` 覆盖了 Mac 本地路径与 Docker socket，使用宿主机 `/var/run/docker.sock` 与 `HOST_PROJECT_ROOT`，子 App 容器由主服务通过该 socket 创建。
 - 步骤 2 将配置 Nginx 反代 80/443，并设置公网 base URL。
 - **外网访问**：若通过 Nginx 提供 80/443，需在 Nginx 中把 `/api`、`/app`、`/v1` 反代到 `http://127.0.0.1:3100`，前端在 80/443 下会使用同源 `/api`，避免 CORS。同时容器需传入 `VITE_HMR_HOST=公网主机名`，Vite HMR WebSocket 才能在外网连上。
+
+### 如何确认 OpenClaw 是否被正常调用
+
+1. **看后端日志**（每次调用 OpenClaw 都会打日志）  
+   在 EC2 上查看主容器日志，例如：
+   ```bash
+   docker logs -f funfo-ai-store
+   ```
+   - 发起请求时：`[OpenClaw] 请求中 http://host.docker.internal:18789/... (timeout=140000ms)`
+   - 成功时：`[OpenClaw] 成功 响应长度=1234`
+   - 失败时：`[OpenClaw] 尝试 1/2 失败: ...`，最终失败会有一条 `[OpenClaw] 最终失败: ...`
+
+2. **调调试接口**（不暴露 token，仅做连通性检查）  
+   在浏览器或本机用 curl 请求（需能访问到后端 3100 或通过 Nginx 反代的 /api）：
+   ```bash
+   curl -s "http://ec2-18-183-255-142.ap-northeast-1.compute.amazonaws.com/api/debug/openclaw-ping"
+   ```
+   返回示例：
+   - 正常：`{"ok":true,"urlMasked":"http://...","status":200,"message":"OpenClaw 正常 (响应长度 4)","responseLength":4}`
+   - 不可达：`{"ok":false,"urlMasked":"...","status":0,"message":"fetch failed ..."}`  
+   可根据 `ok`、`status`、`message` 判断 OpenClaw 是否可达。
