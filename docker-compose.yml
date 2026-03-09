@@ -15,7 +15,7 @@ services:
       - APP_IDLE_MINUTES=30
       - APP_IDLE_CHECK_MS=300000
       - OPENCLAW_URL=http://host.docker.internal:18789/v1/chat/completions
-      - OPENCLAW_TOKEN=5a1192f40b1bb0cc7d2a778fff1c44a4c801ca1c242e4865
+      - OPENCLAW_TOKEN=ad5eafdbdf9e6f965f8d7b976f43460fca15ae9da151aa34
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

@@ -35,7 +35,7 @@ const SERVER_HOST = getLanIp();
 console.log(`🌐 Server LAN IP: ${SERVER_HOST}`);
 
 const OPENCLAW_URL   = process.env.OPENCLAW_URL || 'http://127.0.0.1:18789/v1/chat/completions';
-const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || '5a1192f40b1bb0cc7d2a778fff1c44a4c801ca1c242e4865';
+const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || 'ad5eafdbdf9e6f965f8d7b976f43460fca15ae9da151aa34';
 const REQ_CARD_PREFIX = '__FUNFO_REQ__';
 
 // Auto-fix guardrails (prevent infinite repair loops)
