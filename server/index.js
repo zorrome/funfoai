@@ -34,6 +34,13 @@ function getLanIp() {
 const SERVER_HOST = getLanIp();
 console.log(`🌐 Server LAN IP: ${SERVER_HOST}`);
 
+// 外网访问时预览/分享链接用公网 base（Nginx 反代 80/443 时设置，如 http://ec2-xxx.compute.amazonaws.com 或 https://your-domain.com）
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL ? String(process.env.PUBLIC_BASE_URL).replace(/\/$/, '') : '';
+function getPublicBase() {
+  return PUBLIC_BASE_URL || `http://${SERVER_HOST}:${PORT}`;
+}
+if (PUBLIC_BASE_URL) console.log(`🌐 Public base URL: ${PUBLIC_BASE_URL}`);
+
 const OPENCLAW_URL   = process.env.OPENCLAW_URL || 'http://127.0.0.1:18789/v1/chat/completions';
 const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || 'ad5eafdbdf9e6f965f8d7b976f43460fca15ae9da151aa34';
 const REQ_CARD_PREFIX = '__FUNFO_REQ__';
@@ -144,7 +151,32 @@ After all code blocks, write 2-3 Japanese sentences explaining what was built.`;
 app.use(cors());
 app.use(express.json());
 
-// ── Helpers ───────────────────────────────────────────────────────────
+// LLM 返回的 JSON 常有尾逗号等，修复后解析；失败返回 null
+function parseJsonRelaxed(jsonText) {
+  if (!jsonText || typeof jsonText !== 'string') return null;
+  let s = jsonText.trim();
+  const m = s.match(/\{[\s\S]*\}/);
+  if (m) s = m[0];
+  s = s.replace(/,(\s*[}\]])/g, '$1');
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+const DEFAULT_PLAN_STEPS = [
+  'データモデルとエンティティの定義',
+  'API スコープとエンドポイント設計',
+  '画面構成とナビゲーション設計',
+  '権限・ロールの整理',
+  'エッジケースとバリデーション',
+  'ロールアウトと段階リリース方針',
+];
+const DEFAULT_PLAN_QUESTIONNAIRE = [
+  { id: 'layout', title: 'レイアウト', options: ['カード型', 'テーブル中心', 'ダッシュボード'] },
+  { id: 'scope', title: '初期スコープ', options: ['最小限', '標準', 'フル'] },
+];
 
 function randomSlug(len = 8) {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -176,7 +208,7 @@ function withPreviewLink(appRow) {
     ...appRow,
     preview_slug: slug,
     preview_path: slug ? `/app/${slug}/` : null,
-    preview_url: slug ? `http://${SERVER_HOST}:${PORT}/app/${slug}/` : null,
+    preview_url: slug ? `${getPublicBase()}/app/${slug}/` : null,
   };
 }
 
@@ -1160,17 +1192,21 @@ app.post('/api/apps/plan', async (req, res) => {
     let jsonText = raw.trim();
     const m = jsonText.match(/\{[\s\S]*\}/);
     if (m) jsonText = m[0];
-    const data = JSON.parse(jsonText);
-    const steps = Array.isArray(data?.steps) ? data.steps.map(s => String(s)).filter(Boolean).slice(0, 10) : [];
-    const questionnaire = Array.isArray(data?.questionnaire)
+    const data = parseJsonRelaxed(jsonText);
+    const steps = Array.isArray(data?.steps) ? data.steps.map(s => String(s)).filter(Boolean).slice(0, 10) : DEFAULT_PLAN_STEPS;
+    const questionnaire = Array.isArray(data?.questionnaire) && data.questionnaire.length > 0
       ? data.questionnaire
           .map(q => ({ id: String(q?.id || ''), title: String(q?.title || ''), options: Array.isArray(q?.options) ? q.options.map(o => String(o)).filter(Boolean).slice(0, 6) : [] }))
           .filter(q => q.id && q.title && q.options.length >= 2)
           .slice(0, 6)
-      : [];
+      : DEFAULT_PLAN_QUESTIONNAIRE;
     res.json({ steps, questionnaire });
   } catch (e) {
-    res.status(500).json({ error: `plan failed: ${e.message}` });
+    // OpenClaw 超时等仍返回默认策划，避免整条流程报错
+    res.json({
+      steps: DEFAULT_PLAN_STEPS,
+      questionnaire: DEFAULT_PLAN_QUESTIONNAIRE,
+    });
   }
 });
 

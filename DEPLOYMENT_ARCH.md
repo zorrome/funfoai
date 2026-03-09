@@ -48,6 +48,8 @@
    OPENCLAW_TOKEN=<你的 OpenClaw token>
    # 外网通过 Nginx 访问时，HMR WebSocket 需用公网 host（否则浏览器会连 localhost 失败）
    VITE_HMR_HOST=ec2-18-183-255-142.ap-northeast-1.compute.amazonaws.com
+   # 预览/分享链接的公网 base（与浏览器访问一致，如 http://ec2-xxx 或 https://域名）
+   PUBLIC_BASE_URL=http://ec2-18-183-255-142.ap-northeast-1.compute.amazonaws.com
    ```
 3. 首次启动（使用 EC2 覆盖配置）：
    ```bash
@@ -89,7 +91,7 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
 
 2. **配置要点**（与参考配置一致即可）：
    - **`map $http_upgrade $connection_upgrade`**：用于 Vite HMR WebSocket。若本文件不是被 `include` 在 `http {}` 内，请把该 `map` 放到 `/etc/nginx/nginx.conf` 的 `http { }` 中。
-   - **`location /`**：反代到 `http://127.0.0.1:5175`（Vite 前端），并设置 `Upgrade` / `Connection`，以便 HMR WebSocket 通过 80 连到 5175。
+   - **`location /`**：反代到 `http://127.0.0.1:5175`（Vite 前端），并设置 `Upgrade` / `Connection`，以便 HMR WebSocket 通过 80 连到 5175；**必须**设置 `proxy_buffering off` 与 `proxy_cache off`，否则 Vite 动态 chunk 会出现 `ERR_CONTENT_LENGTH_MISMATCH`、页面空白。
    - **`location /api/`**：反代到 `http://127.0.0.1:3100/api/`，关闭缓冲并拉长超时（SSE/流式）。
    - **`location /app/`**：反代到 `http://127.0.0.1:3100/app/`，用于生成的 App 预览及 `/app/<slug>/api/*`。
    - **`location /v1/`**：反代到 `http://127.0.0.1:3100/v1/`，兼容 OpenClaw 等走 `/v1` 的请求。
