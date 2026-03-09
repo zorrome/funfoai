@@ -6,6 +6,8 @@ services:
   funfo-ai-store:
     volumes:
       - ./server:/app/server
+      # 将宿主机项目根挂载到相同绝对路径，这样容器内写入 HOST_PROJECT_ROOT 下的 server/apps 会直接落到宿主机
+      - ${HOST_PROJECT_ROOT:-/opt/funfoai}:${HOST_PROJECT_ROOT:-/opt/funfoai}
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT:-/opt/funfoai}
