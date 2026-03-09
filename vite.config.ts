@@ -54,7 +54,8 @@
     },
     server: {
       port: 3000,
-      host: '0.0.0.0',   // 允许局域网访问
+      host: '0.0.0.0',   // 允许局域网/外网访问
+      allowedHosts: true, // 允许通过 EC2 主机名或自定义域名访问（否则 Vite 会 Blocked request）
       open: true,
       watch: {
         ignored: [
