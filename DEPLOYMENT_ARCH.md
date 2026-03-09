@@ -76,6 +76,31 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
 
 脚本会：拉取指定分支最新代码 → 使用 `docker-compose.ec2.yml` 构建并启动主服务 → 若本机有 Nginx 则执行 `nginx -s reload`。
 
+### Nginx 配置（外网 80/443 反代）
+
+项目内提供参考配置：`docs/nginx-funfo-ai-store.conf`。在 EC2 上使用步骤：
+
+1. **覆盖或新建站点配置**（按需修改路径）：
+   ```bash
+   sudo cp /opt/funfoai/docs/nginx-funfo-ai-store.conf /etc/nginx/sites-available/funfo-ai-store
+   sudo ln -sf /etc/nginx/sites-available/funfo-ai-store /etc/nginx/sites-enabled/funfo-ai-store
+   ```
+   若已有 `/etc/nginx/sites-enabled/funfo-ai-store`，可直接编辑为与参考配置一致（见下）。
+
+2. **配置要点**（与参考配置一致即可）：
+   - **`map $http_upgrade $connection_upgrade`**：用于 Vite HMR WebSocket。若本文件不是被 `include` 在 `http {}` 内，请把该 `map` 放到 `/etc/nginx/nginx.conf` 的 `http { }` 中。
+   - **`location /`**：反代到 `http://127.0.0.1:5175`（Vite 前端），并设置 `Upgrade` / `Connection`，以便 HMR WebSocket 通过 80 连到 5175。
+   - **`location /api/`**：反代到 `http://127.0.0.1:3100/api/`，关闭缓冲并拉长超时（SSE/流式）。
+   - **`location /app/`**：反代到 `http://127.0.0.1:3100/app/`，用于生成的 App 预览及 `/app/<slug>/api/*`。
+   - **`location /v1/`**：反代到 `http://127.0.0.1:3100/v1/`，兼容 OpenClaw 等走 `/v1` 的请求。
+
+3. **校验并重载**：
+   ```bash
+   sudo nginx -t && sudo nginx -s reload
+   ```
+
+完整内容见仓库内 `docs/nginx-funfo-ai-store.conf`。
+
 ### 说明
 
 - `docker-compose.ec2.yml` 覆盖了 Mac 本地路径与 Docker socket，使用宿主机 `/var/run/docker.sock` 与 `HOST_PROJECT_ROOT`，子 App 容器由主服务通过该 socket 创建。
