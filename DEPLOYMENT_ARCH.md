@@ -188,3 +188,62 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
    - 将 `172.31.43.79` 换成你 EC2 的内网 IP（`hostname -I | awk '{print $1}'`）。
    - 若需通过公网域名访问 OpenClaw 控制台，在 `allowedOrigins` 中追加对应来源（如 `"http://ec2-xxx.compute.amazonaws.com"`）。
    - 保存后重启 OpenClaw，用 `sudo ss -tlnp | grep 18789` 确认出现 `0.0.0.0:18789`，再测 openclaw-ping。
+
+---
+
+## EC2 部署（步骤 3：Docker 子 App 运行）
+
+### 3.1 子 App 容器网络与目录
+
+- 主服务容器：`funfo-ai-store`（由 `docker-compose.yml` + `docker-compose.ec2.yml` 启动）  
+  - 通过 `/var/run/docker.sock` 直接调用宿主机 Docker CLI。  
+  - 使用 `HOST_PROJECT_ROOT` 在宿主机上写入 `server/apps/<appId>/`。  
+  - 加入 Docker 网络 `funfo_ai_store_default`（见 `docker-compose.ec2.yml` 中的 `funfo_net`）。
+- 子 App 容器：`funfo-app-<appId>`  
+  - 由 `server/app-backend-manager.js` 动态创建，镜像为 `node:20-alpine`。  
+  - 固定应用端口：容器内 `3001`。  
+  - 数据目录：挂载宿主机的 `server/apps/<appId>` 到子容器 `/app`，其中：`server.js` / `schema.sql` / `data.sqlite`。  
+  - 所有子 App 容器也加入同一个 Docker 网络 `funfo_ai_store_default`，便于主服务通过容器内 IP 调用其 `3001` 端口。
+
+### 3.2 验证子 App 是否成功创建
+
+1. 在 UI 中生成一个 App（完成 QA 并成功部署一次）。  
+2. 在 EC2 上查看容器：
+   ```bash
+   docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Networks}}' | grep funfo-app-
+   ```
+   - 预期至少看到一个 `funfo-app-<id>`，`Networks` 一列包含 `funfo_ai_store_default`。
+3. 查看对应目录是否存在（以默认 `HOST_PROJECT_ROOT=/opt/funfoai` 为例）：
+   ```bash
+   ls -R /opt/funfoai/server/apps
+   ```
+   - 应能看到按 `appId` 划分的子目录，内含 `server.js` / `schema.sql` / `data.sqlite`。
+
+### 3.3 运行健康检查
+
+- 使用已有的 QA 接口验证子 App 是否可用：
+  ```bash
+  curl -s "http://<域名或EC2>/api/apps/<id>/qa-check" | jq
+  ```
+  - `ok: true` 且 `checks` 中 `runtime_wake` / `preview_page` 为 `ok` 表示后端容器和预览都正常。
+- 若 `runtime_wake` 失败，可在 EC2 上查看对应 `funfo-app-<id>` 容器日志：
+  ```bash
+  docker logs funfo-app-<id>
+  ```
+
+### 3.4 常见问题排查
+
+- **宿主机 Docker 不可用或权限不足**  
+  - 确认 `docker ps` 在 EC2 上可正常运行。  
+  - 若主服务容器日志中出现 `docker run failed`，检查：  
+    - `/var/run/docker.sock` 是否正确挂载；  
+    - 宿主机上的 `docker` 命令是否可在 root 下正常执行。
+
+- **子 App 容器创建成功但预览 502/超时**  
+  - 多数是网络不通或路由错误；确认：  
+    - `docker ps` 中 `funfo-app-<id>` 的网络包含 `funfo_ai_store_default`；  
+    - 主服务容器 `funfo-ai-store` 也在该网络：  
+      ```bash
+      docker network inspect funfo_ai_store_default | jq '.[0].Containers | keys'
+      ```  
+    - 如有必要，重启主服务和子 App 容器，再次执行 `/api/apps/<id>/qa-check`。

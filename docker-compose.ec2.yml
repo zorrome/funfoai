@@ -19,3 +19,9 @@ services:
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - funfo_net
+
+networks:
+  funfo_net:
+    name: funfo_ai_store_default
