@@ -505,9 +505,11 @@ export default function VibeCoding() {
   useEffect(() => { fetchApps(); }, [fetchApps]);
   useEffect(() => {
     api.me().then(u => {
-      setUser(u);
-      setProfileNick(u.nickname || '');
-      setProfileAvatar(u.avatar_url || '');
+      setUser(u ?? null);
+      if (u) {
+        setProfileNick(u.nickname || '');
+        setProfileAvatar(u.avatar_url || '');
+      }
     }).catch(() => setUser(null));
   }, []);
   useEffect(() => { streamingRef.current = streamingContent; }, [streamingContent]);

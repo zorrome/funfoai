@@ -173,9 +173,10 @@ export const api = {
       return d;
     }),
 
-  me: (): Promise<User> =>
+  me: (): Promise<User | null> =>
     fetch(`${BASE}/auth/me`, { headers: { ...authHeaders() } }).then(async r => {
       const d = await parseJsonSafe(r);
+      if (r.status === 401) return null; // 未登录视为无用户，不抛错
       if (!r.ok) throw new Error(d?.error || '未ログイン');
       return d;
     }),
