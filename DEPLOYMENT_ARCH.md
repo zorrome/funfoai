@@ -105,6 +105,52 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
 
 完整内容见仓库内 `docs/nginx-funfo-ai-store.conf`。
 
+### Nginx 前期准备（sites-available / sites-enabled）
+
+1. **确认启用了 `sites-enabled` 机制**  
+   - Ubuntu 默认在 `/etc/nginx/nginx.conf` 的 `http {}` 中包含：
+     ```nginx
+     http {
+       ...
+       include /etc/nginx/sites-enabled/*;
+     }
+     ```
+   - 若缺少这行，需要手动补上并重载 Nginx。
+
+2. **在 `sites-available` 中创建站点配置**  
+   - 将仓库中的示例拷贝到 `/etc/nginx/sites-available/funfo-ai-store`（根据实际项目路径调整）：
+     ```bash
+     sudo cp /home/ubuntu/data/funfoai/docs/nginx-funfo-ai-store.conf \
+       /etc/nginx/sites-available/funfo-ai-store
+     ```
+
+3. **建立软链接到 `sites-enabled`**  
+   - 启用该站点：
+     ```bash
+     sudo ln -sf /etc/nginx/sites-available/funfo-ai-store \
+       /etc/nginx/sites-enabled/funfo-ai-store
+     ```
+   - 如默认站点 `default` 不再需要，可禁用：
+     ```bash
+     sudo rm -f /etc/nginx/sites-enabled/default
+     ```
+
+4. **处理 `map $http_upgrade` 的位置**  
+   - `map $http_upgrade $connection_upgrade { ... }` 必须在 `http {}` 作用域内，通常放在 `/etc/nginx/nginx.conf` 的 `http {}` 顶部。  
+   - 简单做法：
+     - 将示例配置中的 `map` 段剪切到 `nginx.conf` 的 `http {}` 内；
+     - `sites-available/funfo-ai-store` 中只保留 `server { ... }`。
+
+5. **检查并重载 Nginx**  
+   ```bash
+   sudo nginx -t           # 配置检查
+   sudo systemctl reload nginx   # 或 sudo nginx -s reload
+   ```
+
+6. **验证站点是否生效**  
+   - 浏览器访问 `http://<EC2 公网 IP>/` 应能看到 funfo AI 前端；  
+   - `curl -I http://<EC2 公网 IP>/api/apps` 应返回 Nginx 响应（状态码 200/401 等），而不是 404。
+
 ### 说明
 
 - `docker-compose.ec2.yml` 覆盖了 Mac 本地路径与 Docker socket，使用宿主机 `/var/run/docker.sock` 与 `HOST_PROJECT_ROOT`，子 App 容器由主服务通过该 socket 创建。
