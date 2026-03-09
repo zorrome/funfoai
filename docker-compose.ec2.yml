@@ -13,5 +13,7 @@ services:
       # OpenClaw 若在本机 18789 端口，从容器内用 host.docker.internal 访问（Linux 需 Docker 20.10+）
       - OPENCLAW_URL=${OPENCLAW_URL:-http://host.docker.internal:18789/v1/chat/completions}
       - OPENCLAW_TOKEN=${OPENCLAW_TOKEN:-}
+      # 外网访问时 HMR WebSocket 用公网 host（.env 中设 VITE_HMR_HOST=你的 EC2 公网主机名或域名）
+      - VITE_HMR_HOST=${VITE_HMR_HOST:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -1,7 +1,7 @@
 // API base strategy:
-// - dev (3000/5173): use Vite proxy (/api)
-// - other ports (static preview / LAN direct): call backend :3100 directly
-const BASE = (typeof window !== 'undefined' && ['3000', '5173'].includes(window.location.port))
+// - Vite dev (3000/5173) 或 Nginx 反代 (80/443)：走同源 /api，由代理到后端 3100，避免 CORS
+// - 其他端口（如直连 5175）：直连 hostname:3100
+const BASE = (typeof window !== 'undefined' && ['3000', '5173', '80', '443', ''].includes(window.location.port))
   ? '/api'
   : `${typeof window !== 'undefined' ? window.location.protocol : 'http:'}//${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:3100/api`;
 

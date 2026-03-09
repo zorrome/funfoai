@@ -56,6 +56,10 @@
       port: 3000,
       host: '0.0.0.0',   // 允许局域网/外网访问
       allowedHosts: true, // 允许通过 EC2 主机名或自定义域名访问（否则 Vite 会 Blocked request）
+      // 外网访问时 HMR WebSocket 需连公网 host，否则浏览器会连 localhost 失败；EC2 上设置 VITE_HMR_HOST=公网主机名
+      hmr: process.env.VITE_HMR_HOST
+        ? { host: process.env.VITE_HMR_HOST, port: 5175, clientPort: 5175 }
+        : true,
       open: true,
       watch: {
         ignored: [

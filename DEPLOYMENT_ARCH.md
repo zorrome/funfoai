@@ -46,6 +46,8 @@
    HOST_PROJECT_ROOT=/opt/funfoai
    OPENCLAW_URL=http://host.docker.internal:18789/v1/chat/completions
    OPENCLAW_TOKEN=<你的 OpenClaw token>
+   # 外网通过 Nginx 访问时，HMR WebSocket 需用公网 host（否则浏览器会连 localhost 失败）
+   VITE_HMR_HOST=ec2-18-183-255-142.ap-northeast-1.compute.amazonaws.com
    ```
 3. 首次启动（使用 EC2 覆盖配置）：
    ```bash
@@ -78,3 +80,4 @@ PROJECT_ROOT=/opt/funfoai GIT_BRANCH=main ./scripts/update-and-restart.sh
 
 - `docker-compose.ec2.yml` 覆盖了 Mac 本地路径与 Docker socket，使用宿主机 `/var/run/docker.sock` 与 `HOST_PROJECT_ROOT`，子 App 容器由主服务通过该 socket 创建。
 - 步骤 2 将配置 Nginx 反代 80/443，并设置公网 base URL。
+- **外网访问**：若通过 Nginx 提供 80/443，需在 Nginx 中把 `/api`、`/app`、`/v1` 反代到 `http://127.0.0.1:3100`，前端在 80/443 下会使用同源 `/api`，避免 CORS。同时容器需传入 `VITE_HMR_HOST=公网主机名`，Vite HMR WebSocket 才能在外网连上。
