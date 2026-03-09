@@ -1,0 +1,17 @@
+# EC2 环境覆盖：覆盖本地 Mac 路径与 Docker socket，便于在 EC2 上一键更新并重启
+# 使用: docker compose -f docker-compose.yml -f docker-compose.ec2.yml up -d --build
+# HOST_PROJECT_ROOT 由 scripts/update-and-restart.sh 传入（或 .env），需为宿主机上项目根目录的绝对路径
+
+services:
+  funfo-ai-store:
+    volumes:
+      - ./server:/app/server
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT:-/opt/funfoai}
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      # OpenClaw 若在本机 18789 端口，从容器内用 host.docker.internal 访问（Linux 需 Docker 20.10+）
+      - OPENCLAW_URL=${OPENCLAW_URL:-http://host.docker.internal:18789/v1/chat/completions}
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
