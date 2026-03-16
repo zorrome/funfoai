@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store V10 改造进度对照表</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#fff; color:#111827; }
+    .wrap { max-width: 1360px; margin: 24px auto; padding: 0 16px 40px; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    h2 { font-size: 20px; margin: 0 0 10px; }
+    .muted { color:#6b7280; font-size:14px; }
+    .card { border:1px solid #d1d5db; border-radius:12px; padding:16px; margin-bottom:16px; background:#fff; }
+    table { width:100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border:1px solid #d1d5db; padding:12px; text-align:left; vertical-align:top; font-size:14px; }
+    th { background:#f3f4f6; }
+    .done { color:#166534; font-weight:600; }
+    .doing { color:#92400e; font-weight:600; }
+    .todo { color:#991b1b; font-weight:600; }
+    .bar { width: 180px; height: 10px; background:#e5e7eb; border-radius:999px; overflow:hidden; display:inline-block; vertical-align:middle; margin-right:10px; }
+    .fill { height:100%; background:#10b981; }
+    ul { margin:0; padding-left:18px; line-height:1.7; color:#374151; }
+    code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>funfo AI Store · V10 改造进度对照表</h1>
+      <div class="muted">用途：按 V10 主目标查看当前改造进度。不是美化图，而是执行进度看板。</div>
+    </div>
+
+    <div class="card">
+      <h2>总进度</h2>
+      <div><span class="bar"><span class="fill" style="width:45%"></span></span><strong>约 45%</strong></div>
+      <ul>
+        <li>前半场关键架构转向已完成：新状态机、candidate/live 分层、发布期去 repair</li>
+        <li>后半场还在继续：真正的 promote/rollback 闭环、旧字段退场、verifier 继续瘦身、UI 彻底统一</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>V10 目标进度对照</h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:18%">目标模块</th>
+            <th style="width:10%">进度</th>
+            <th style="width:24%">已完成</th>
+            <th style="width:24%">进行中</th>
+            <th style="width:24%">未开始 / 未完成</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>1. 新状态机</strong><br/>release_state / candidate / live / failed / rollback</td>
+            <td>70%</td>
+            <td>
+              <ul>
+                <li><code>release_state</code> 已落库</li>
+                <li><code>live_version_id</code> / <code>candidate_version_id</code> 已落库</li>
+                <li>API/UI 已开始返回与展示</li>
+                <li>旧数据可自动回填</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>更多页面开始只认 <code>release_state</code></li>
+                <li>旧字段在逐步去权化</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>旧字段还没完全退场</li>
+                <li>新状态机还没成为全系统唯一真相</li>
+              </ul>
+            </td>
+          </tr>
+
+          <tr>
+            <td><strong>2. candidate / live 分离</strong></td>
+            <td>50%</td>
+            <td>
+              <ul>
+                <li>公网 <code>/app/&lt;slug&gt;</code> 开始只认 <code>live/rollback</code></li>
+                <li>内部 candidate 路由已建立：<code>/__candidate/app/:id</code></li>
+                <li>health_check 已切到 candidate 内部路由</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>失败时 release app 状态开始跟随变化</li>
+                <li>candidate 语义在继续收紧</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>promote 还不算真正原子切换</li>
+                <li>rollback 还没完全闭环</li>
+                <li>candidate 生命周期还没完全独立</li>
+              </ul>
+            </td>
+          </tr>
+
+          <tr>
+            <td><strong>3. 发布管线简化</strong><br/>去 repair / 更单义</td>
+            <td>65%</td>
+            <td>
+              <ul>
+                <li>发布期 verifier 自动 repair 已移除</li>
+                <li>发布失败不再进入一长串自动修复</li>
+                <li>pipeline 确定性明显增强</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>publish pipeline 仍在继续切向 candidate/live 模型</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>失败后用户路径还没彻底产品化</li>
+                <li>promote/rollback 还没完全产品级收口</li>
+              </ul>
+            </td>
+          </tr>
+
+          <tr>
+            <td><strong>4. Verifier 瘦身</strong></td>
+            <td>40%</td>
+            <td>
+              <ul>
+                <li>一批非关键项已降级为 warning</li>
+                <li>auth smoke 不再作为 blocking</li>
+                <li>frontend local-first / api binding 等项已降级</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>继续向 V10 的 BLOCK/WARNING 清单靠拢</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>BLOCK 还没完全按 V10 重构</li>
+                <li>检测方法与失败表达还没彻底整理</li>
+              </ul>
+            </td>
+          </tr>
+
+          <tr>
+            <td><strong>5. 用户可理解性</strong><br/>My Apps / Admin / Workspace</td>
+            <td>45%</td>
+            <td>
+              <ul>
+                <li>My Apps / Admin 已开始显示 Draft / Candidate / Live / Failed / Rollback</li>
+                <li>基础设施入口已经显著化</li>
+                <li>UI 文案开始贴近新模型</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>更多前台逻辑改为只认 <code>release_state</code></li>
+                <li>按钮/Badge/状态提示在逐步统一</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>部分页面仍能看到旧字段影响</li>
+                <li>失败/回滚/candidate 的产品表达还不够完整</li>
+              </ul>
+            </td>
+          </tr>
+
+          <tr>
+            <td><strong>6. 系统复杂度下降</strong></td>
+            <td>35%</td>
+            <td>
+              <ul>
+                <li>最危险的一块：发布期自动 repair 已拔掉</li>
+                <li>新状态机开始接管核心语义</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>旧字段去权化正在进行</li>
+                <li>preview/live 历史耦合在继续清理</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>整体复杂度仍然偏高</li>
+                <li>还没达到“让人放心的稳定版”</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>当前里程碑判断</h2>
+      <ul>
+        <li><strong>已完成：</strong> 架构方向转向，且不可逆</li>
+        <li><strong>进行中：</strong> 新模型接管全系统</li>
+        <li><strong>未完成：</strong> 候选/正式/回滚 的完整闭环与复杂度收敛</li>
+      </ul>
+      <p><strong>一句话：</strong>前半场“转向”基本做完了，后半场“收敛成稳定系统”还在继续。</p>
+    </div>
+
+    <div class="card">
+      <h2>接下来优先级（按你当前目标排序）</h2>
+      <ol>
+        <li>继续让 UI / API 只认 <code>release_state</code></li>
+        <li>继续做 promote / rollback 闭环</li>
+        <li>继续压缩 verifier 的 blocking 项</li>
+        <li>最后再清理旧字段和旧分支</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo app 生成 / 发布 / 长期化 架构图</title>
+  <style>
+    body{margin:0;font-family:Inter,system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0}
+    .wrap{max-width:1280px;margin:0 auto;padding:32px}
+    h1{font-size:30px;margin:0 0 12px}
+    p{color:#94a3b8}
+    .board{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:28px}
+    .col{background:#111827;border:1px solid #1f2937;border-radius:20px;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+    .tag{display:inline-block;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:700;margin-bottom:14px}
+    .tag.dev{background:#1d4ed8;color:#dbeafe}.tag.pub{background:#7c3aed;color:#ede9fe}.tag.live{background:#059669;color:#d1fae5}
+    .card{background:#0b1220;border:1px solid #1e293b;border-radius:16px;padding:16px;margin:12px 0}
+    .title{font-size:18px;font-weight:700;margin-bottom:8px}
+    .small{font-size:13px;color:#94a3b8;line-height:1.55}
+    .arrow{display:flex;align-items:center;justify-content:center;font-size:28px;color:#38bdf8}
+    .flow{display:grid;grid-template-columns:1fr 80px 1fr 80px 1fr;gap:10px;align-items:center;margin-top:28px}
+    ul{margin:10px 0 0 18px;color:#cbd5e1;line-height:1.7}
+    .footer{margin-top:28px;padding:18px;border:1px solid #1e293b;border-radius:16px;background:#111827}
+    code{background:#0b1220;padding:2px 6px;border-radius:8px;color:#93c5fd}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>funfo：app 生成 → 发布 → 长期化（Full Docker）架构图</h1>
+    <p>目标状态：长期化 app 的前端与后端都运行在同一个独立 Docker 容器中；主平台只负责网关、编排、状态管理。</p>
+
+    <div class="flow">
+      <div class="col">
+        <div class="tag dev">阶段 1 · 开发 / 生成</div>
+        <div class="card"><div class="title">Workspace 开发</div><div class="small">用户在 funfo AI Store 中通过聊天生成 app，持续编辑前端 JSX、server_code、schema.sql。</div></div>
+        <div class="card"><div class="title">生成产物</div><div class="small">写入 <code>apps</code>、<code>app_versions</code>、messages，以及 server/apps/&lt;appId&gt; 的运行时文件。</div></div>
+        <ul>
+          <li>前端代码：App.jsx / code</li>
+          <li>后端代码：server.js / server_code</li>
+          <li>数据库：schema.sql / sqlite</li>
+          <li>开发态预览：preview-manager</li>
+        </ul>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col">
+        <div class="tag pub">阶段 2 · 发布</div>
+        <div class="card"><div class="title">发布流水线</div><div class="small">前端分析、后端/SQL 生成、DB 检查、容器启动、健康检查、验证、完成。</div></div>
+        <div class="card"><div class="title">发布目标</div><div class="small">把最新版本固化为长期化 release app，并生成完整的容器运行目录。</div></div>
+        <ul>
+          <li>生成完整 frontend runtime HTML</li>
+          <li>复制 runtime-assets（react/recharts 等）</li>
+          <li>写入 server.js + index.html + schema.sql</li>
+          <li>为长期化 app 创建独立容器</li>
+        </ul>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col">
+        <div class="tag live">阶段 3 · 长期化 / 线上运行</div>
+        <div class="card"><div class="title">Full Docker Runtime</div><div class="small">一个长期化 app = 一个容器，容器里同时提供前端页面、/api 接口和 sqlite 数据库。</div></div>
+        <div class="card"><div class="title">主平台职责</div><div class="small">主平台不再托管长期化 app 的前端预览，只做 /app/&lt;slug&gt; 的网关代理、唤醒、休眠、运行状态管理。</div></div>
+        <ul>
+          <li><code>/app/&lt;slug&gt;/</code> → 代理到 app 容器前端</li>
+          <li><code>/app/&lt;slug&gt;/api/*</code> → 同容器 API</li>
+          <li>SQLite 使用 data_prod.sqlite</li>
+          <li>Admin / My Apps 可查看容器运行状态</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="board">
+      <div class="col">
+        <div class="tag dev">开发态</div>
+        <div class="small">继续允许使用 preview-manager，适合迭代、调试、快速修复。</div>
+      </div>
+      <div class="col">
+        <div class="tag pub">发布态</div>
+        <div class="small">发布阶段负责把“开发态资产”转成“长期化容器资产”。</div>
+      </div>
+      <div class="col">
+        <div class="tag live">长期态</div>
+        <div class="small">长期化 app 必须完整 Docker 化，避免现在这种 backend-only Docker 的混合架构。</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <strong>一句话总结：</strong>
+      长期化 app 的正确目标不是“后端在 Docker，前端靠主平台 preview”，而是 <strong>前后端都在同一个独立 app 容器中运行</strong>。
+    </div>
+  </div>
+</body>
+</html>

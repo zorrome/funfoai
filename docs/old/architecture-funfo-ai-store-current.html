@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store current - 架构图</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background:#f6f8fb; color:#0f172a; }
+    .wrap { max-width: 1320px; margin: 24px auto; padding: 0 16px; }
+    .card { background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:16px; margin-bottom:16px; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    .muted { color:#475569; font-size: 14px; }
+    svg { width:100%; height:auto; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+    .legend { display:grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap:8px; font-size:13px; color:#334155; }
+    .dot { display:inline-block; width:10px; height:10px; border-radius:999px; margin-right:6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>funfo AI Store 当前版本架构图</h1>
+      <div class="muted">当前重点：主平台 Docker 容器 + 长期化 App Full Docker Runtime + 发布流水线 + Verifier + /app/&lt;slug&gt; 网关代理</div>
+    </div>
+
+    <svg viewBox="0 0 1320 920" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L10,3 L0,6 z" fill="#64748b" />
+        </marker>
+      </defs>
+
+      <rect x="20" y="20" width="1280" height="880" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+
+      <rect x="54" y="58" width="250" height="96" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+      <text x="179" y="92" text-anchor="middle" font-size="16" font-weight="700">用户浏览器</text>
+      <text x="179" y="118" text-anchor="middle" font-size="13" fill="#334155">localhost:5175 / 3100</text>
+      <text x="179" y="138" text-anchor="middle" font-size="12" fill="#475569">My Apps / Workspace / 发布 / /app/&lt;slug&gt;</text>
+
+      <rect x="350" y="42" width="560" height="272" rx="12" fill="#ecfeff" stroke="#22d3ee"/>
+      <text x="630" y="72" text-anchor="middle" font-size="18" font-weight="700">funfo-ai-store 主容器（Docker）</text>
+
+      <rect x="380" y="94" width="230" height="82" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="495" y="123" text-anchor="middle" font-size="14" font-weight="600">Frontend (Vite)</text>
+      <text x="495" y="146" text-anchor="middle" font-size="12" fill="#475569">:5175 · My Apps / Workspace / Admin</text>
+
+      <rect x="640" y="94" width="240" height="82" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="760" y="123" text-anchor="middle" font-size="14" font-weight="600">Backend (Express)</text>
+      <text x="760" y="146" text-anchor="middle" font-size="12" fill="#475569">:3100 · API / Publish / Runtime Gateway</text>
+
+      <rect x="380" y="196" width="500" height="92" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="630" y="223" text-anchor="middle" font-size="14" font-weight="600">核心平台能力</text>
+      <text x="630" y="246" text-anchor="middle" font-size="12" fill="#475569">App 生成 · 版本管理 · 发布编排 · Admin Runtime 面板</text>
+      <text x="630" y="266" text-anchor="middle" font-size="12" fill="#475569">基础设施入口（项目属性 / 数据库 / 统计分析）</text>
+
+      <rect x="950" y="44" width="300" height="146" rx="10" fill="#fff7ed" stroke="#fb923c"/>
+      <text x="1100" y="74" text-anchor="middle" font-size="16" font-weight="700">OpenClaw / AI 生成层</text>
+      <text x="1100" y="102" text-anchor="middle" font-size="12" fill="#475569">需求理解 / 前端转换 / 后端生成 / Repair</text>
+      <text x="1100" y="124" text-anchor="middle" font-size="12" fill="#475569">发布期可触发 verifier 失败后的定向修复</text>
+      <text x="1100" y="146" text-anchor="middle" font-size="12" fill="#475569">但当前仍需继续收敛为稳定发布链路</text>
+
+      <rect x="350" y="352" width="900" height="210" rx="12" fill="#f0fdf4" stroke="#4ade80"/>
+      <text x="800" y="384" text-anchor="middle" font-size="18" font-weight="700">长期化 App 运行层（Full Docker Runtime）</text>
+
+      <rect x="384" y="412" width="250" height="118" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="509" y="440" text-anchor="middle" font-size="14" font-weight="600">funfo-app-3 / funfo-app-7 ...</text>
+      <text x="509" y="462" text-anchor="middle" font-size="12" fill="#475569">一个长期化 App = 一个独立容器</text>
+      <text x="509" y="482" text-anchor="middle" font-size="12" fill="#475569">前端 index.html + runtime-assets</text>
+      <text x="509" y="502" text-anchor="middle" font-size="12" fill="#475569">后端 server.js + /api + /health</text>
+
+      <rect x="675" y="412" width="250" height="118" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="800" y="440" text-anchor="middle" font-size="14" font-weight="600">访问路径</text>
+      <text x="800" y="462" text-anchor="middle" font-size="12" fill="#475569">/app/&lt;slug&gt;/ → 容器前端</text>
+      <text x="800" y="482" text-anchor="middle" font-size="12" fill="#475569">/app/&lt;slug&gt;/api/* → 同容器 API</text>
+      <text x="800" y="502" text-anchor="middle" font-size="12" fill="#475569">/app/&lt;slug&gt;/health → 健康检查</text>
+
+      <rect x="966" y="412" width="250" height="118" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="1091" y="440" text-anchor="middle" font-size="14" font-weight="600">当前运行特征</text>
+      <text x="1091" y="462" text-anchor="middle" font-size="12" fill="#475569">docker label: app_id / slug</text>
+      <text x="1091" y="482" text-anchor="middle" font-size="12" fill="#475569">dbMode=prod / frontend=true</text>
+      <text x="1091" y="502" text-anchor="middle" font-size="12" fill="#475569">主平台通过网关代理，不直接暴露 host port</text>
+
+      <rect x="350" y="596" width="900" height="184" rx="12" fill="#eef2ff" stroke="#818cf8"/>
+      <text x="800" y="626" text-anchor="middle" font-size="18" font-weight="700">发布流水线（当前版本）</text>
+
+      <rect x="382" y="654" width="180" height="90" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="472" y="682" text-anchor="middle" font-size="13" font-weight="600">1. Frontend Analyze</text>
+      <text x="472" y="704" text-anchor="middle" font-size="12" fill="#475569">识别 local-first / API 契约 / 转换需求</text>
+
+      <rect x="578" y="654" width="180" height="90" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="668" y="682" text-anchor="middle" font-size="13" font-weight="600">2. Backend / SQL Generate</text>
+      <text x="668" y="704" text-anchor="middle" font-size="12" fill="#475569">生成 server_code / schema.sql</text>
+
+      <rect x="774" y="654" width="180" height="90" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="864" y="682" text-anchor="middle" font-size="13" font-weight="600">3. Docker Start + Health</text>
+      <text x="864" y="704" text-anchor="middle" font-size="12" fill="#475569">容器启动 / health / 前端路由检查</text>
+
+      <rect x="970" y="654" width="246" height="90" rx="8" fill="#fff" stroke="#94a3b8"/>
+      <text x="1093" y="682" text-anchor="middle" font-size="13" font-weight="600">4. Verifier</text>
+      <text x="1093" y="704" text-anchor="middle" font-size="12" fill="#475569">artifact / contract / schema / auth smoke</text>
+      <text x="1093" y="724" text-anchor="middle" font-size="12" fill="#dc2626">当前风险：失败版本可能仍保持可访问</text>
+
+      <rect x="54" y="814" width="1196" height="54" rx="10" fill="#fff1f2" stroke="#fda4af"/>
+      <text x="652" y="846" text-anchor="middle" font-size="13" fill="#7f1d1d">当前架构重点问题：发布状态与运行状态尚未完全分离；理想模型应为 candidate → verifier → promote live，失败版本应 rollback/stop。</text>
+
+      <line x1="304" y1="106" x2="350" y2="106" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="910" y1="128" x2="950" y2="118" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="760" y1="314" x2="760" y2="352" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="800" y1="562" x2="800" y2="596" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="562" y1="699" x2="578" y2="699" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="758" y1="699" x2="774" y2="699" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+      <line x1="954" y1="699" x2="970" y2="699" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    </svg>
+
+    <div class="card">
+      <div class="legend">
+        <div><span class="dot" style="background:#38bdf8"></span>用户入口层</div>
+        <div><span class="dot" style="background:#22d3ee"></span>主平台 Docker 容器层</div>
+        <div><span class="dot" style="background:#4ade80"></span>长期化 App Full Docker Runtime</div>
+        <div><span class="dot" style="background:#818cf8"></span>发布流水线 / Verifier</div>
+        <div><span class="dot" style="background:#fb923c"></span>AI 生成与修复层</div>
+        <div><span class="dot" style="background:#fda4af"></span>当前待修复的架构风险</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

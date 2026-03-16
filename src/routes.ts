@@ -22,6 +22,34 @@ export const router = createBrowserRouter([
     Component: VibeCoding,
   },
   {
+    path: "/market",
+    Component: VibeCoding,
+  },
+  {
+    path: "/workspace",
+    Component: VibeCoding,
+  },
+  {
+    path: "/workspace/new",
+    Component: VibeCoding,
+  },
+  {
+    path: "/workspace/:appId",
+    Component: VibeCoding,
+  },
+  {
+    path: "/studio/:workspaceSlug",
+    Component: VibeCoding,
+  },
+  {
+    path: "/my-apps",
+    Component: VibeCoding,
+  },
+  {
+    path: "/profile",
+    Component: VibeCoding,
+  },
+  {
     path: "/vibe-coding",
     Component: VibeCoding,
   },

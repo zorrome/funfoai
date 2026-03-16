@@ -1,0 +1,39 @@
+{
+  "appId": 33,
+  "name": "test17",
+  "description": "test17",
+  "workspaceSlug": "w_p9pzpnquzakw",
+  "runtimeMode": "local",
+  "releaseState": "failed",
+  "appRole": "release",
+  "versionNumber": 2,
+  "links": {
+    "preview": "/w/w_p9pzpnquzakw_preview",
+    "public": "/w/w_p9pzpnquzakw"
+  },
+  "artifacts": {
+    "frontend": {
+      "file": "App.jsx",
+      "sha256": "ca15a3cbd95495be37c5550c2261d9f4395ad3a2e6dbf5b3d74e9b73ca25edd8",
+      "bytes": 15344
+    },
+    "backend": {
+      "file": "server.js",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "schema": {
+      "file": "schema.sql",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "contracts": {
+    "frontend": [],
+    "backend": []
+  },
+  "schema": {
+    "tables": []
+  },
+  "updatedAt": "2026-03-15 20:52:59"
+}

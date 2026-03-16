@@ -1,12 +1,16 @@
 
-  import { defineConfig } from 'vite';
+  import { defineConfig, loadEnv } from 'vite';
   import react from '@vitejs/plugin-react-swc';
   import tailwindcss from '@tailwindcss/vite';
   import path from 'path';
 
-  export default defineConfig({
-    plugins: [tailwindcss(), react()],
-    resolve: {
+  export default defineConfig(({ mode }) => {
+    const env = loadEnv(mode, process.cwd(), '');
+    const backendPort = env.VITE_PROXY_BACKEND_PORT || '3100';
+
+    return {
+      plugins: [tailwindcss(), react()],
+      resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
       alias: {
         'vaul@1.1.2': 'vaul',
@@ -47,28 +51,20 @@
         '@radix-ui/react-accordion@1.2.3': '@radix-ui/react-accordion',
         '@': path.resolve(__dirname, './src'),
       },
-    },
-    build: {
+      },
+      build: {
       target: 'esnext',
       outDir: 'build',
-    },
-    server: {
+      },
+      server: {
       port: 3000,
-      host: '0.0.0.0',   // 允许局域网/外网访问
-      allowedHosts: true, // 允许通过 EC2 主机名或自定义域名访问（否则 Vite 会 Blocked request）
-      // 外网通过 Nginx 80/443 访问时：
-      // - 浏览器侧 WebSocket 只能走 80/443（安全组不开放 5175）
-      // - 但 Vite 服务端仍监听自身端口（在 Dockerfile 里实际是 5175）
-      // 因此这里只设置 clientPort，让浏览器连 80，由 Nginx 反代到 5175。
-      hmr: process.env.VITE_DISABLE_HMR === '1'
-        ? false
-        : (process.env.VITE_HMR_HOST
-            ? { host: process.env.VITE_HMR_HOST, clientPort: 80 }
-            : true),
+      host: '0.0.0.0',   // 允许局域网访问
       open: true,
       watch: {
         ignored: [
           '**/server/apps/**',
+          '**/server/context/**',
+          '**/server/logs/**',
           '**/*.sqlite',
           '**/*.sqlite-shm',
           '**/*.sqlite-wal',
@@ -77,21 +73,26 @@
           '**/funfo.db-wal',
         ],
       },
-      proxy: {
+        proxy: {
         // 把 /api 请求代理到后端，这样其他电脑不需要直连 3100 端口
         '/api': {
-          target: 'http://localhost:3100',
+            target: `http://localhost:${backendPort}`,
           changeOrigin: true,
         },
         '/v1': {
-          target: 'http://localhost:3100',
+            target: `http://localhost:${backendPort}`,
           changeOrigin: true,
         },
         // 兼容从前端端口打开 slug 预览链接（/app/:slug）
         '/app': {
-          target: 'http://localhost:3100',
+            target: `http://localhost:${backendPort}`,
+          changeOrigin: true,
+        },
+        '/w': {
+            target: `http://localhost:${backendPort}`,
           changeOrigin: true,
         },
       },
-    },
+      },
+    };
   });

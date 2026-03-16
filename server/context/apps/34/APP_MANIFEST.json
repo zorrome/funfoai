@@ -1,0 +1,23 @@
+{
+  "appId": 34,
+  "name": "App-34",
+  "runtimeMode": "local",
+  "releaseState": "draft",
+  "links": {
+    "preview": null,
+    "public": null
+  },
+  "artifacts": {
+    "frontend": null,
+    "backend": null,
+    "schema": null
+  },
+  "contracts": {
+    "frontend": [],
+    "backend": []
+  },
+  "schema": {
+    "tables": []
+  },
+  "updatedAt": null
+}

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>系统层：App 开发 → 上线 → 上线后沙盒运行构架</title>
+  <style>
+    body{font:15px/1.75 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,PingFang SC,Helvetica,Arial,sans-serif;background:#f7fafc;color:#1e293b;margin:0}
+    .wrap{max-width:1100px;margin:0 auto;padding:32px 20px 72px}.hero{background:linear-gradient(135deg,#0f172a,#1e293b);color:#fff;padding:28px;border-radius:20px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:22px;margin-top:18px}.muted{color:#64748b}.pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#e0f2fe;color:#0369a1;font-size:12px;font-weight:700}.ok{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e} h1,h2,h3{margin:0 0 12px} ul{margin:8px 0 0 20px} li{margin:6px 0} code{background:#f1f5f9;padding:2px 6px;border-radius:6px} .flow{padding:14px 16px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <div class="pill">当前代码现状说明</div>
+    <h1>系统层：App 开发 → 上线 → 上线后沙盒运行构架</h1>
+    <p class="muted" style="color:rgba(255,255,255,.82)">本文描述的是当前 funfo AI Store 这套系统在“创建新 app、开发、发布到 live、以及上线后运行”时的系统层构架逻辑。</p>
+  </section>
+
+  <section class="card">
+    <h2>1. 实体层</h2>
+    <div class="grid">
+      <div>
+        <h3>1.1 App 实体</h3>
+        <ul>
+          <li><code>apps</code> 表记录 app 主实体。</li>
+          <li>核心字段包括：<code>id</code>、<code>status</code>、<code>release_state</code>、<code>app_role</code>、<code>release_app_id</code>、<code>current_version</code>、<code>live_version_id</code>、<code>candidate_version_id</code>。</li>
+          <li>当前系统同时承载了：draft、candidate、live、failed、rollback 等状态。</li>
+        </ul>
+      </div>
+      <div>
+        <h3>1.2 版本实体</h3>
+        <ul>
+          <li><code>app_versions</code> 记录每一次保存或发布产物。</li>
+          <li>每个版本可包含三类核心产物：<code>code</code>（前端 JSX）、<code>server_code</code>（后端）、<code>sql_code</code>（SQL/schema）。</li>
+          <li>文件系统中也会 materialize 到 <code>server/apps/&lt;appId&gt;/</code> 下面。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>2. 创建与开发期运行逻辑</h2>
+    <div class="flow">
+      用户在 Workspace 发起需求 → <code>/api/apps/:id/chat</code> → 生成前端 JSX / 可选后端 / 可选 SQL → 写入 <code>app_versions</code> → materialize 文件 → 启动 preview → 若为 server 模式则部署 backend
+    </div>
+    <ul>
+      <li>主入口是 <code>server/index.js</code> 的 <code>/api/apps/:id/chat</code>。</li>
+      <li>生成完成后会立即保存一条新版本。</li>
+      <li>如果 runtime mode 是 server，则会尝试部署 backend 并启动预览。</li>
+      <li>预览通过 <code>preview_slug</code> 或 preview 端口访问。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>3. 上线（Draft → Candidate → Live）系统流程</h2>
+    <div class="flow">
+      Draft / Live 升级入口 → 发布流水线 <code>processPublishJob()</code> → 生成 Candidate 产物 → 启动 Candidate runtime → 数据库 schema 应用 → verifier 校验 → promote 成 live
+    </div>
+    <ul>
+      <li>发布核心在 <code>server/publish/pipeline.js</code> 的 <code>processPublishJob()</code>。</li>
+      <li>发布主步骤目前收敛为 4 步：生成 Candidate、启动并检查 Candidate 环境、发布验证、发布完成。</li>
+      <li>系统会生成 frontend/backend/sql 组合产物，并进行 dry-run、runtime health、verifier 多层校验。</li>
+      <li>只有通过 verify 之后，才会把 candidate promote 到 live。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>4. 上线后沙盒 / 运行时结构</h2>
+    <div class="grid">
+      <div>
+        <h3>4.1 运行对象</h3>
+        <ul>
+          <li>每个运行中的 app 会有自己的 runtime/container 语义。</li>
+          <li>系统会追踪 backend、frontend、preview、health 状态。</li>
+          <li>Admin 面板可查看 runtime 状态，并可 wake / sleep。</li>
+        </ul>
+      </div>
+      <div>
+        <h3>4.2 数据文件</h3>
+        <ul>
+          <li>运行期数据库主要围绕 SQLite 文件。</li>
+          <li>prod 路径会落到 app 对应目录的数据文件中。</li>
+          <li>发布前后会结合 backup snapshot、schema apply、verifier 做安全检查。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>5. 当前版本的重要现实状态</h2>
+    <ul>
+      <li><span class="pill ok">已实现</span> 发布不再只是简单替换，而是有 Candidate / Verify / Promote 主干。</li>
+      <li><span class="pill ok">已实现</span> 文档基线逐步收敛到 <code>docs/</code>。</li>
+      <li><span class="pill warn">刚做关键修复</span> 从 live 派生 draft 的发布，已开始从“直接碰 live runtime”改成“先在 draft runtime 验证，再 promote”。</li>
+      <li><span class="pill warn">仍需持续验证</span> draft/live 隔离是系统级风险点，建议继续做真实发布演练验证。</li>
+    </ul>
+  </section>
+</div>
+</body>
+</html>

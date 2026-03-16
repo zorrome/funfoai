@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Funfo AI Store · V10 整体进展总结（最新版）</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121937;
+      --text: #ecf2ff;
+      --muted: #aab6d3;
+      --line: #2a3568;
+      --good: #30c48d;
+      --warn: #ffb84d;
+      --bad: #ff6b6b;
+      --blue: #6ea8fe;
+      --violet: #b197fc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #0a1022 0%, #111831 100%);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 20px 80px; }
+    .hero {
+      background: linear-gradient(135deg, rgba(110,168,254,.18), rgba(177,151,252,.12));
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    h1,h2,h3 { margin: 0 0 12px; }
+    h1 { font-size: 34px; line-height: 1.15; }
+    h2 { font-size: 22px; margin-top: 26px; }
+    h3 { font-size: 16px; color: var(--text); }
+    p, li { color: var(--muted); }
+    .sub { font-size: 15px; color: #c9d5f5; max-width: 900px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+      margin-top: 18px;
+    }
+    .card {
+      background: rgba(18,25,55,.92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .metric {
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+      color: #fff;
+    }
+    .label { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    .good { background: rgba(48,196,141,.15); color: #7cf0bd; border: 1px solid rgba(48,196,141,.35); }
+    .warn { background: rgba(255,184,77,.12); color: #ffd28a; border: 1px solid rgba(255,184,77,.3); }
+    .bad { background: rgba(255,107,107,.12); color: #ff9a9a; border: 1px solid rgba(255,107,107,.3); }
+    .blue { background: rgba(110,168,254,.12); color: #9dc5ff; border: 1px solid rgba(110,168,254,.3); }
+    .violet { background: rgba(177,151,252,.12); color: #d0bcff; border: 1px solid rgba(177,151,252,.28); }
+    ul, ol { padding-left: 18px; margin: 10px 0 0; }
+    li { margin-bottom: 8px; }
+    code {
+      background: rgba(255,255,255,.06);
+      padding: 2px 6px;
+      border-radius: 6px;
+      color: #fff;
+    }
+    .footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th { color: #dfe8ff; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    @media (max-width: 900px) {
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: span 12; }
+      h1 { font-size: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="pill blue">Funfo AI Store</div>
+      <div class="pill violet">V10 迭代</div>
+      <div class="pill good">目标：用户易用 + 发布逻辑简单 + 更高成功率</div>
+      <h1>V10 整体进展总结（最新版）</h1>
+      <p class="sub">
+        当前 V10 已经从“状态机概念迁移”进入到“闭环收口 + 安全清理”阶段。现在最明显的变化是：
+        系统已经不再只是内部逻辑变了，而是 <b>Admin、发布入口、发布弹框、发布进度、failed→repair→republish 流程</b> 都逐渐统一到了
+        <code>draft / candidate / live / failed / rollback</code> 这套模型上。
+      </p>
+    </section>
+
+    <section class="grid">
+      <div class="card span-3">
+        <div class="label">总体进度</div>
+        <div class="metric">约 85%</div>
+        <p>已经进入收口阶段：主路径基本成型，当前重点是稳定性、语义收口、脏代码清理。</p>
+      </div>
+      <div class="card span-3">
+        <div class="label">当前阶段</div>
+        <div class="metric">收口 + 清理</div>
+        <p>不再以大范围加功能为主，而是先把现有 V10 主路径做稳、做净、做简单。</p>
+      </div>
+      <div class="card span-3">
+        <div class="label">最强进展</div>
+        <div class="metric">发布闭环</div>
+        <p>Failed → Repair → Republish 这条链已经有了原因、动作、修后引导和按钮限制。</p>
+      </div>
+      <div class="card span-3">
+        <div class="label">当前风险</div>
+        <div class="metric">尾部残片</div>
+        <p>最近最大的工程噪音，仍然是文件尾部重复块 / 残片导致的运行时或启动问题。</p>
+      </div>
+
+      <div class="card span-7">
+        <h2>一、已经完成的核心成果</h2>
+        <ul>
+          <li><b>Admin 观察语义 V10 化：</b>从旧 <code>status</code> 心智迁移到 <code>release_state + review_status</code> 心智。</li>
+          <li><b>Admin 操作语义显式化：</b>后台不再只是 patch 旧字段，而开始使用更贴状态机的 action / transition。</li>
+          <li><b>发布主线切到 Candidate 心智：</b>发布被明确为“进入 Candidate，再根据验证结果进入 Live / Failed / Rollback”。</li>
+          <li><b>发布路径和动作类型已可见：</b>用户能知道自己是在 Draft 首发、Live 升级、Rollback 恢复，还是 Failed 重试。</li>
+          <li><b>failed → repair → republish 闭环开始成型：</b>失败原因可见、修复入口明确、修复成功后可重新发布、未修复前禁止盲目重发。</li>
+          <li><b>prompt 架构与项目逻辑开始对齐：</b>release 不再在发布管线里偷偷 auto-repair，repair 回到 failure-aware repair 路径。</li>
+          <li><b>清理工作已经开始：</b>已删除无引用的 <code>server/prompts_Old.js</code>，并开始收旧 release repair 语义残件。</li>
+        </ul>
+      </div>
+
+      <div class="card span-5">
+        <h2>二、目前盘面的判断</h2>
+        <div class="pill good">方向稳定</div>
+        <div class="pill blue">闭环可见</div>
+        <div class="pill warn">稳定性仍需收口</div>
+        <ul>
+          <li>V10 状态机已经不只是内部模型，而是进入了用户可见层和后台操作层。</li>
+          <li>当前最值当的事情，已经从“继续加很多新功能”切成“把主路径收干净、收稳定”。</li>
+          <li>这意味着后面每前进一步，都应该优先减少心智复杂度和运行时噪音。</li>
+        </ul>
+      </div>
+
+      <div class="card span-12">
+        <h2>三、最新关键推进主题</h2>
+        <table>
+          <thead>
+            <tr><th>主题</th><th>现状</th><th>意义</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Admin V10 化</td>
+              <td>已成型</td>
+              <td>后台观察和操作开始真正基于 <code>candidate/live/failed/rollback</code>。</td>
+            </tr>
+            <tr>
+              <td>Publish 路径显式化</td>
+              <td>已成型</td>
+              <td>用户能明确看到 <code>Draft → Candidate</code> / <code>Live → Candidate</code> 等路径。</td>
+            </tr>
+            <tr>
+              <td>Prompt 架构对齐</td>
+              <td>已迈过关键坎</td>
+              <td>发布管线不再偷偷 release-time repair，逻辑更简单、更可解释。</td>
+            </tr>
+            <tr>
+              <td>Failed → Repair → Republish</td>
+              <td>接近完整</td>
+              <td>是当前最影响“发布成功率”的关键闭环。</td>
+            </tr>
+            <tr>
+              <td>脏代码 / 冗余清理</td>
+              <td>刚开始</td>
+              <td>已经从“只加逻辑”转向“在保存基线的前提下减负”。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card span-6">
+        <h2>四、这轮真正解决了什么</h2>
+        <ul>
+          <li>用户不再只是知道“失败了”，还开始知道失败类型、失败阶段、失败原因。</li>
+          <li>repair 不再是隐含路径，而是有明确入口。</li>
+          <li>repair 成功后，系统会明确告诉用户“现在可以重新发布”。</li>
+          <li>failed 未修复前，绿色发布按钮已经被限制，减少盲目重试。</li>
+          <li>前端按钮文案开始彻底贴近 V10，而不是继续混着旧表达。</li>
+        </ul>
+      </div>
+
+      <div class="card span-6">
+        <h2>五、当前最主要的问题</h2>
+        <ul>
+          <li><b>不是方向问题，而是工程稳定性问题。</b></li>
+          <li>最近多次 build / Docker 起不来，主要不是大逻辑错，而是历史残片：缺 helper、缺 state、孤立 <code>});</code>、尾部重复块。</li>
+          <li>这类问题如果不持续清掉，会拖慢后续所有收口工作。</li>
+          <li>所以现在“安全清理”本身就是 V10 进度的一部分，不是附属工作。</li>
+        </ul>
+      </div>
+
+      <div class="card span-12">
+        <h2>六、当前已确认的安全清理成果</h2>
+        <ul>
+          <li>已保存当前版本完整备份：<span class="mono">backups/funfo_AI_Store_full_0.69.4A_20260315-200309.tar.gz</span></li>
+          <li>已删除无运行引用的旧文件：<code>server/prompts_Old.js</code></li>
+          <li>已清理多处旧语义：如 <code>manual release repair</code> → <code>manual failed-state repair</code></li>
+          <li>已修复多处实际影响运行的尾部残片，包括 <code>server/index.js</code> 的孤立闭合残片。</li>
+        </ul>
+      </div>
+
+      <div class="card span-12">
+        <h2>七、最新提交链（近阶段关键点）</h2>
+        <table>
+          <thead>
+            <tr><th>Commit</th><th>主题</th><th>意义</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>4bbba776</code></td><td>align publish pipeline with V10 prompt role boundaries</td><td>发布管线开始真正对齐新版 prompts.js 的角色边界。</td></tr>
+            <tr><td><code>77346ade</code></td><td>surface publish preflight checks in V10 dialog</td><td>发布前检查开始显式化，用户在点击前就知道能不能发。</td></tr>
+            <tr><td><code>afca10cd</code></td><td>expose publish route in status responses and progress UI</td><td>服务端显式返回 <code>publish_route</code>，进度 UI 开始展示路径。</td></tr>
+            <tr><td><code>e4c91de0</code></td><td>add explicit publish action labels in V10 dialog</td><td>发布动作类型开始对用户可见。</td></tr>
+            <tr><td><code>907ae6c0</code></td><td>surface publish route summaries in V10 dialog</td><td>发布弹框开始解释当前具体路径。</td></tr>
+            <tr><td><code>ef16fb2c</code></td><td>align publish flow and dialog with candidate live semantics</td><td>发布流程和弹框开始真正采用 Candidate / Live 心智。</td></tr>
+            <tr><td><code>bbb21e46</code></td><td>split admin transitions by candidate rollback failed paths</td><td>Admin transition 更贴近真实 candidate / rollback / failed 路径。</td></tr>
+            <tr><td><code>da884add</code></td><td>centralize admin release transition mapping</td><td>后台 release transition 映射开始集中化。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card span-12">
+        <h2>八、下一阶段最合理的推进顺序</h2>
+        <ol>
+          <li><b>继续安全清理</b>
+            <ul>
+              <li>优先清旧 release 语义残件、未引用文件、前端旧表达。</li>
+              <li>继续清理容易产生尾部残片的高风险段。</li>
+            </ul>
+          </li>
+          <li><b>继续统一发布按钮和状态行为</b>
+            <ul>
+              <li>让 failed / repair-ready / candidate / live 下的按钮行为完全状态机化。</li>
+            </ul>
+          </li>
+          <li><b>减少旧字段主导权</b>
+            <ul>
+              <li>继续让前端更多依赖 <code>release_state + publish_route</code>，而不是旧 <code>publish_status</code>。</li>
+            </ul>
+          </li>
+          <li><b>最后再做更深层的收口</b>
+            <ul>
+              <li>在系统更稳后，再继续往 promote / rollback 的更深逻辑闭环推进。</li>
+            </ul>
+          </li>
+        </ol>
+      </div>
+
+      <div class="card span-12">
+        <h2>九、结论</h2>
+        <p>
+          如果一句话概括现在的状态：<b>V10 的主路径已经基本成型，用户能理解的发布心智也基本建立，现在最重要的是在保存基线的前提下，把系统清干净、清稳定。</b>
+        </p>
+        <p>
+          所以接下来最优策略不是再大幅铺新功能，而是继续围绕你的目标——<b>用户易用、发布逻辑简单、发布成功率更高</b>——把收口、清理、稳定性这三件事做扎实。
+        </p>
+      </div>
+    </section>
+
+    <div class="footer">
+      更新时间：2026-03-15 20:14 JST · 本页基于当前代码状态、最近提交链、Docker 重建结果与本轮迭代整理。说明：我检查过记忆，但没有命中可直接复用的历史总结。Source: memory_search returned no saved summary.
+    </div>
+  </div>
+</body>
+</html>

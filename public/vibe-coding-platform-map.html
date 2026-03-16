@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store · Vibe Coding Platform Map</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --paper: #fffdf8;
+      --ink: #18232f;
+      --muted: #5f6d7a;
+      --line: #d7cfc1;
+      --teal: #177d74;
+      --teal-soft: #dff4f0;
+      --amber: #c47d19;
+      --amber-soft: #fff1d8;
+      --red: #b74c35;
+      --red-soft: #fde6df;
+      --blue: #245a92;
+      --blue-soft: #deebf9;
+      --green: #2f6f3e;
+      --green-soft: #e3f3e7;
+      --shadow: 0 18px 50px rgba(24, 35, 47, 0.08);
+      --radius: 26px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(23, 125, 116, 0.11), transparent 30%),
+        radial-gradient(circle at top right, rgba(196, 125, 25, 0.10), transparent 24%),
+        linear-gradient(180deg, #fbf7ef 0%, var(--bg) 100%);
+      font: 15px/1.7 "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+    }
+
+    .page {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 32px 20px 72px;
+    }
+
+    .hero,
+    .panel {
+      background: rgba(255, 253, 248, 0.88);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(215, 207, 193, 0.92);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 30px 32px 26px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -70px -90px auto;
+      width: 260px;
+      height: 260px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(23, 125, 116, 0.14), transparent 70%);
+      pointer-events: none;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      letter-spacing: 0.02em;
+    }
+
+    h1 {
+      font-size: clamp(34px, 5vw, 52px);
+      line-height: 1.05;
+      max-width: 900px;
+    }
+
+    h2 {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      margin: 0;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      margin-bottom: 14px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(23, 125, 116, 0.10);
+      color: var(--teal);
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .hero-copy {
+      max-width: 940px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.35fr 0.95fr;
+      gap: 18px;
+      margin-top: 26px;
+    }
+
+    .summary {
+      padding: 18px 18px 16px;
+      border-radius: 22px;
+      border: 1px solid rgba(23, 125, 116, 0.16);
+      background: linear-gradient(135deg, rgba(223, 244, 240, 0.95), rgba(255, 253, 248, 0.92));
+    }
+
+    .summary strong {
+      display: block;
+      font-size: 22px;
+      margin-bottom: 4px;
+      color: var(--teal);
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .status-card {
+      padding: 16px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.88);
+    }
+
+    .status-card b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 15px;
+    }
+
+    .meter {
+      height: 9px;
+      border-radius: 999px;
+      background: #efe7d8;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .meter span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--teal), #2ca69b);
+    }
+
+    .status-card small {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .panel {
+      padding: 24px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .section-head p {
+      max-width: 720px;
+      color: var(--muted);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1.4fr 0.9fr;
+      gap: 18px;
+    }
+
+    .notes {
+      display: grid;
+      gap: 12px;
+    }
+
+    .note-card {
+      padding: 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid var(--line);
+    }
+
+    .note-card b {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 15px;
+    }
+
+    .note-card p {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .good {
+      background: linear-gradient(135deg, var(--green-soft), rgba(255, 255, 255, 0.92));
+      border-color: rgba(47, 111, 62, 0.18);
+    }
+
+    .warn {
+      background: linear-gradient(135deg, var(--amber-soft), rgba(255, 255, 255, 0.92));
+      border-color: rgba(196, 125, 25, 0.20);
+    }
+
+    .risk {
+      background: linear-gradient(135deg, var(--red-soft), rgba(255, 255, 255, 0.92));
+      border-color: rgba(183, 76, 53, 0.20);
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255, 253, 248, 0.95), rgba(250, 246, 238, 0.96));
+      border: 1px solid var(--line);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .legend i {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .footer {
+      margin-top: 24px;
+      padding: 18px 20px;
+      border-radius: 20px;
+      background: rgba(24, 35, 47, 0.04);
+      border: 1px solid rgba(24, 35, 47, 0.08);
+      color: var(--muted);
+    }
+
+    code {
+      padding: 2px 6px;
+      border-radius: 8px;
+      background: rgba(36, 90, 146, 0.08);
+      color: var(--blue);
+      font-family: "SFMono-Regular", "Menlo", monospace;
+      font-size: 13px;
+    }
+
+    @media (max-width: 980px) {
+      .hero-grid,
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      .section-head {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="eyebrow">Vibe Coding Assessment</div>
+      <h1>funfo AI Store 现在已经像一台平台雏形，但还没到“顶级编程平台”的终局。</h1>
+      <p class="hero-copy">
+        如果把目标定义成“能稳定生成、能持续迭代、能可靠发布、长期不容易烂尾”，你这套系统现在的强项已经不只是聊天生成，而是开始具备
+        <strong>长期化运营能力</strong>：有 workspace、preview、release、publish、browser verifier、repair、docs 和 memory 的闭环。
+      </p>
+
+      <div class="hero-grid">
+        <div class="summary">
+          <strong>当前判断</strong>
+          <p>
+            这套平台现在大概处在 <b>7.2 / 10</b> 的阶段：已经明显强过普通“AI 拼页面工具”，因为它有编排层、验证层和发布层；但距离“强编程 + 强部署 + 很少 bug”
+            还差最后两段路，一段是 <b>多文件工程深度</b>，一段是 <b>发布后长期运行与观测</b>。
+          </p>
+        </div>
+
+        <div class="status-grid">
+          <div class="status-card">
+            <b>编排能力 8.0</b>
+            <div class="meter"><span style="width:80%"></span></div>
+            <small>system / soul / agent / memory / runtime 已经形成分层，不再是单 prompt。</small>
+          </div>
+          <div class="status-card">
+            <b>生成稳定性 7.0</b>
+            <div class="meter"><span style="width:70%"></span></div>
+            <small>browser smoke、repair、SQL normalization 已经让明显坏结果少了一截。</small>
+          </div>
+          <div class="status-card">
+            <b>部署能力 7.0</b>
+            <div class="meter"><span style="width:70%"></span></div>
+            <small>preview / public / studio 语义更清楚，但 release runtime 一致性仍要继续打磨。</small>
+          </div>
+          <div class="status-card">
+            <b>长期化能力 7.8</b>
+            <div class="meter"><span style="width:78%"></span></div>
+            <small>manifest、plan、failures、linked draft 已经让 app 开始具备“持续进化”能力。</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="panel">
+        <div class="section-head">
+          <div>
+            <h2>App 长期化逻辑</h2>
+            <p>这张图看的不是“一次生成”，而是一个 app 如何从想法，变成长期在线、可回滚、可继续迭代的资产。</p>
+          </div>
+        </div>
+
+        <div class="split">
+          <div>
+            <svg viewBox="0 0 980 610" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="App 长期化逻辑图">
+              <defs>
+                <marker id="arrow-app" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+                  <path d="M0 0 L12 6 L0 12 Z" fill="#566472" />
+                </marker>
+                <marker id="arrow-loop" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+                  <path d="M0 0 L12 6 L0 12 Z" fill="#c47d19" />
+                </marker>
+              </defs>
+
+              <rect x="18" y="18" width="944" height="574" rx="28" fill="#fffdf8" stroke="#d7cfc1" />
+
+              <text x="58" y="68" font-size="22" font-weight="700" fill="#18232f">主业务流</text>
+              <text x="58" y="352" font-size="22" font-weight="700" fill="#18232f">长期资产流</text>
+
+              <rect x="52" y="98" width="180" height="108" rx="22" fill="#deebf9" stroke="#245a92" />
+              <text x="142" y="130" text-anchor="middle" font-size="18" font-weight="700" fill="#163b64">1. Create</text>
+              <text x="142" y="156" text-anchor="middle" font-size="13" fill="#324455">用户选模型、给出需求</text>
+              <text x="142" y="176" text-anchor="middle" font-size="13" fill="#324455">平台创建 app / workspace</text>
+
+              <rect x="272" y="98" width="180" height="108" rx="22" fill="#dff4f0" stroke="#177d74" />
+              <text x="362" y="130" text-anchor="middle" font-size="18" font-weight="700" fill="#145e58">2. Draft</text>
+              <text x="362" y="156" text-anchor="middle" font-size="13" fill="#324455">生成前端、后端、SQL</text>
+              <text x="362" y="176" text-anchor="middle" font-size="13" fill="#324455">开始形成可编辑草稿</text>
+
+              <rect x="492" y="98" width="180" height="108" rx="22" fill="#e3f3e7" stroke="#2f6f3e" />
+              <text x="582" y="130" text-anchor="middle" font-size="18" font-weight="700" fill="#295d34">3. Preview</text>
+              <text x="582" y="156" text-anchor="middle" font-size="13" fill="#324455">预览启动、浏览器 smoke</text>
+              <text x="582" y="176" text-anchor="middle" font-size="13" fill="#324455">失败则进入 repair</text>
+
+              <rect x="712" y="98" width="212" height="108" rx="22" fill="#fff1d8" stroke="#c47d19" />
+              <text x="818" y="130" text-anchor="middle" font-size="18" font-weight="700" fill="#925d10">4. Release / Publish</text>
+              <text x="818" y="156" text-anchor="middle" font-size="13" fill="#324455">candidate 验证</text>
+              <text x="818" y="176" text-anchor="middle" font-size="13" fill="#324455">live、公开、审核、回滚</text>
+
+              <line x1="232" y1="152" x2="272" y2="152" stroke="#566472" stroke-width="3" marker-end="url(#arrow-app)" />
+              <line x1="452" y1="152" x2="492" y2="152" stroke="#566472" stroke-width="3" marker-end="url(#arrow-app)" />
+              <line x1="672" y1="152" x2="712" y2="152" stroke="#566472" stroke-width="3" marker-end="url(#arrow-app)" />
+
+              <rect x="52" y="392" width="190" height="122" rx="22" fill="#fffdf8" stroke="#d7cfc1" />
+              <text x="147" y="426" text-anchor="middle" font-size="18" font-weight="700" fill="#18232f">Identity</text>
+              <text x="147" y="454" text-anchor="middle" font-size="13" fill="#324455">MISSION</text>
+              <text x="147" y="474" text-anchor="middle" font-size="13" fill="#324455">SOUL / STYLE</text>
+              <text x="147" y="494" text-anchor="middle" font-size="13" fill="#324455">APP_MANIFEST</text>
+
+              <rect x="278" y="392" width="190" height="122" rx="22" fill="#fffdf8" stroke="#d7cfc1" />
+              <text x="373" y="426" text-anchor="middle" font-size="18" font-weight="700" fill="#18232f">Structured Docs</text>
+              <text x="373" y="454" text-anchor="middle" font-size="13" fill="#324455">APP_SPEC</text>
+              <text x="373" y="474" text-anchor="middle" font-size="13" fill="#324455">API_CONTRACT</text>
+              <text x="373" y="494" text-anchor="middle" font-size="13" fill="#324455">DB_SCHEMA</text>
+
+              <rect x="504" y="392" width="190" height="122" rx="22" fill="#fffdf8" stroke="#d7cfc1" />
+              <text x="599" y="426" text-anchor="middle" font-size="18" font-weight="700" fill="#18232f">Learning</text>
+              <text x="599" y="454" text-anchor="middle" font-size="13" fill="#324455">PLAN</text>
+              <text x="599" y="474" text-anchor="middle" font-size="13" fill="#324455">FAILURES</text>
+              <text x="599" y="494" text-anchor="middle" font-size="13" fill="#324455">RELEASE_NOTES</text>
+
+              <rect x="730" y="392" width="194" height="122" rx="22" fill="#fde6df" stroke="#b74c35" />
+              <text x="827" y="426" text-anchor="middle" font-size="18" font-weight="700" fill="#943b28">Next Iteration</text>
+              <text x="827" y="454" text-anchor="middle" font-size="13" fill="#324455">linked workspace draft</text>
+              <text x="827" y="474" text-anchor="middle" font-size="13" fill="#324455">从 live 派生下一个版本</text>
+              <text x="827" y="494" text-anchor="middle" font-size="13" fill="#324455">持续演进而不是重做</text>
+
+              <line x1="242" y1="452" x2="278" y2="452" stroke="#566472" stroke-width="3" marker-end="url(#arrow-app)" />
+              <line x1="468" y1="452" x2="504" y2="452" stroke="#566472" stroke-width="3" marker-end="url(#arrow-app)" />
+              <line x1="694" y1="452" x2="730" y2="452" stroke="#566472" stroke-width="3" marker-end="url(#arrow-app)" />
+
+              <line x1="818" y1="206" x2="818" y2="330" stroke="#c47d19" stroke-width="3" stroke-dasharray="8 8" />
+              <path d="M818 330 C818 358, 882 340, 914 356 C942 370, 944 520, 836 520" fill="none" stroke="#c47d19" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow-loop)" />
+
+              <line x1="582" y1="206" x2="582" y2="392" stroke="#177d74" stroke-width="2.5" stroke-dasharray="6 7" />
+              <text x="598" y="304" font-size="13" fill="#177d74">每轮生成都会沉淀文档和记忆</text>
+
+              <line x1="362" y1="206" x2="147" y2="392" stroke="#245a92" stroke-width="2.5" stroke-dasharray="6 7" />
+              <text x="212" y="270" font-size="13" fill="#245a92">草稿阶段就开始形成 identity</text>
+            </svg>
+
+            <div class="legend">
+              <span><i style="background:#245a92"></i>创建和入口语义</span>
+              <span><i style="background:#177d74"></i>开发与验证</span>
+              <span><i style="background:#c47d19"></i>发布与长期演化</span>
+              <span><i style="background:#b74c35"></i>失败、反馈与下一轮迭代</span>
+            </div>
+          </div>
+
+          <div class="notes">
+            <div class="note-card good">
+              <b>这部分你已经做对了</b>
+              <p>平台不是一次性生成器，而是让 app 带着 identity、spec、contract、failures 和 release history 持续存在。</p>
+            </div>
+            <div class="note-card warn">
+              <b>长期化的关键门槛</b>
+              <p>后续要继续把长期资产从 markdown 升到更强的结构化事实，尤其是 decisions、schema、runtime health 和 release evidence。</p>
+            </div>
+            <div class="note-card risk">
+              <b>当前最大风险</b>
+              <p>如果工程产物还是过度依赖单次生成和 preview runtime，app 虽然能活下来，但复杂度一上来会越来越难维护。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="panel">
+        <div class="section-head">
+          <div>
+            <h2>AI 生成逻辑</h2>
+            <p>这张图看的不是 UI，而是一次 workspace 生成背后，平台如何选择模型、装配上下文、生成、验证、修复并沉淀记忆。</p>
+          </div>
+        </div>
+
+        <div class="split">
+          <div>
+            <svg viewBox="0 0 980 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI 生成逻辑图">
+              <defs>
+                <marker id="arrow-ai" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+                  <path d="M0 0 L12 6 L0 12 Z" fill="#566472" />
+                </marker>
+              </defs>
+
+              <rect x="18" y="18" width="944" height="664" rx="28" fill="#fffdf8" stroke="#d7cfc1" />
+
+              <rect x="44" y="54" width="210" height="90" rx="22" fill="#deebf9" stroke="#245a92" />
+              <text x="149" y="86" text-anchor="middle" font-size="18" font-weight="700" fill="#163b64">1. User Request</text>
+              <text x="149" y="112" text-anchor="middle" font-size="13" fill="#324455">workspace 输入需求</text>
+              <text x="149" y="132" text-anchor="middle" font-size="13" fill="#324455">选择平台开放模型</text>
+
+              <rect x="300" y="54" width="210" height="90" rx="22" fill="#deebf9" stroke="#245a92" />
+              <text x="405" y="86" text-anchor="middle" font-size="18" font-weight="700" fill="#163b64">2. Provider Resolve</text>
+              <text x="405" y="112" text-anchor="middle" font-size="13" fill="#324455">平台决定 provider</text>
+              <text x="405" y="132" text-anchor="middle" font-size="13" fill="#324455">Codex / Claude / model key</text>
+
+              <rect x="556" y="54" width="380" height="220" rx="24" fill="#dff4f0" stroke="#177d74" />
+              <text x="746" y="88" text-anchor="middle" font-size="20" font-weight="700" fill="#145e58">3. Prompt Orchestrator</text>
+
+              <rect x="584" y="108" width="144" height="50" rx="16" fill="#fffdf8" stroke="#177d74" />
+              <text x="656" y="139" text-anchor="middle" font-size="14" font-weight="700" fill="#18232f">Platform Kernel</text>
+
+              <rect x="744" y="108" width="160" height="50" rx="16" fill="#fffdf8" stroke="#177d74" />
+              <text x="824" y="139" text-anchor="middle" font-size="14" font-weight="700" fill="#18232f">System / Dev Rules</text>
+
+              <rect x="584" y="174" width="144" height="50" rx="16" fill="#fffdf8" stroke="#177d74" />
+              <text x="656" y="205" text-anchor="middle" font-size="14" font-weight="700" fill="#18232f">Soul / Identity</text>
+
+              <rect x="744" y="174" width="160" height="50" rx="16" fill="#fffdf8" stroke="#177d74" />
+              <text x="824" y="205" text-anchor="middle" font-size="14" font-weight="700" fill="#18232f">Active Agent</text>
+
+              <rect x="584" y="240" width="144" height="50" rx="16" fill="#fffdf8" stroke="#177d74" />
+              <text x="656" y="271" text-anchor="middle" font-size="14" font-weight="700" fill="#18232f">App Memory</text>
+
+              <rect x="744" y="240" width="160" height="50" rx="16" fill="#fffdf8" stroke="#177d74" />
+              <text x="824" y="271" text-anchor="middle" font-size="14" font-weight="700" fill="#18232f">Runtime Context</text>
+
+              <rect x="44" y="206" width="466" height="134" rx="24" fill="#fff1d8" stroke="#c47d19" />
+              <text x="277" y="240" text-anchor="middle" font-size="20" font-weight="700" fill="#925d10">Context Loader</text>
+              <text x="277" y="272" text-anchor="middle" font-size="14" fill="#324455">history + APP_SPEC + API_CONTRACT + DB_SCHEMA + APP_MANIFEST</text>
+              <text x="277" y="296" text-anchor="middle" font-size="14" fill="#324455">PLAN + FAILURES + RELEASE_NOTES + 当前版本代码状态</text>
+
+              <rect x="44" y="388" width="210" height="100" rx="22" fill="#e3f3e7" stroke="#2f6f3e" />
+              <text x="149" y="420" text-anchor="middle" font-size="18" font-weight="700" fill="#295d34">4. LLM Generate</text>
+              <text x="149" y="446" text-anchor="middle" font-size="13" fill="#324455">stream provider text</text>
+              <text x="149" y="466" text-anchor="middle" font-size="13" fill="#324455">返回 jsx / server / sql</text>
+
+              <rect x="300" y="388" width="210" height="100" rx="22" fill="#e3f3e7" stroke="#2f6f3e" />
+              <text x="405" y="420" text-anchor="middle" font-size="18" font-weight="700" fill="#295d34">5. Parse & Save</text>
+              <text x="405" y="446" text-anchor="middle" font-size="13" fill="#324455">parseAIResponse</text>
+              <text x="405" y="466" text-anchor="middle" font-size="13" fill="#324455">写版本、更新 docs</text>
+
+              <rect x="556" y="388" width="180" height="100" rx="22" fill="#fde6df" stroke="#b74c35" />
+              <text x="646" y="420" text-anchor="middle" font-size="18" font-weight="700" fill="#943b28">6. Validate</text>
+              <text x="646" y="446" text-anchor="middle" font-size="13" fill="#324455">lint / contract / schema</text>
+              <text x="646" y="466" text-anchor="middle" font-size="13" fill="#324455">browser smoke</text>
+
+              <rect x="772" y="388" width="164" height="100" rx="22" fill="#fde6df" stroke="#b74c35" />
+              <text x="854" y="420" text-anchor="middle" font-size="18" font-weight="700" fill="#943b28">7. Repair</text>
+              <text x="854" y="446" text-anchor="middle" font-size="13" fill="#324455">定向修复失败点</text>
+              <text x="854" y="466" text-anchor="middle" font-size="13" fill="#324455">成功才保留新版本</text>
+
+              <rect x="176" y="548" width="248" height="94" rx="22" fill="#dff4f0" stroke="#177d74" />
+              <text x="300" y="580" text-anchor="middle" font-size="18" font-weight="700" fill="#145e58">8. Preview / Studio</text>
+              <text x="300" y="606" text-anchor="middle" font-size="13" fill="#324455">用户看到结果、继续 edit / rewrite</text>
+
+              <rect x="544" y="548" width="248" height="94" rx="22" fill="#fff1d8" stroke="#c47d19" />
+              <text x="668" y="580" text-anchor="middle" font-size="18" font-weight="700" fill="#925d10">9. Release Pipeline</text>
+              <text x="668" y="606" text-anchor="middle" font-size="13" fill="#324455">manifest -> candidate -> live -> publish</text>
+
+              <line x1="254" y1="99" x2="300" y2="99" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="510" y1="99" x2="556" y2="99" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="277" y1="340" x2="277" y2="388" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="254" y1="438" x2="300" y2="438" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="510" y1="438" x2="556" y2="438" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="736" y1="438" x2="772" y2="438" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="646" y1="488" x2="646" y2="548" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+              <line x1="424" y1="595" x2="544" y2="595" stroke="#566472" stroke-width="3" marker-end="url(#arrow-ai)" />
+
+              <path d="M854 488 C854 548, 854 620, 430 620" fill="none" stroke="#b74c35" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow-ai)" />
+              <text x="850" y="540" font-size="13" fill="#b74c35">失败则带证据回到 repair，再回到 preview</text>
+
+              <path d="M300 548 C300 514, 240 514, 180 516 C108 520, 92 468, 92 432" fill="none" stroke="#177d74" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow-ai)" />
+              <text x="48" y="536" font-size="13" fill="#177d74">用户下一轮需求会再次触发同一条生成链路</text>
+            </svg>
+
+            <div class="legend">
+              <span><i style="background:#245a92"></i>入口与模型选择</span>
+              <span><i style="background:#177d74"></i>生成编排与预览</span>
+              <span><i style="background:#c47d19"></i>上下文与发布衔接</span>
+              <span><i style="background:#b74c35"></i>验证、失败证据和 repair</span>
+            </div>
+          </div>
+
+          <div class="notes">
+            <div class="note-card good">
+              <b>现在已经比普通 AI 生成器强的地方</b>
+              <p>模型并不是裸跑。平台会先装配 identity、memory、docs、runtime context，再进入生成，所以连续性已经明显更强。</p>
+            </div>
+            <div class="note-card warn">
+              <b>真正影响上限的瓶颈</b>
+              <p>agent 现在更像“强编排”而不是真正的“强自主 coding agent”。多文件工程拆分、工具使用深度、长任务规划还可以继续上台阶。</p>
+            </div>
+            <div class="note-card risk">
+              <b>最该继续补的能力</b>
+              <p>让验证证据更标准化，把 browser smoke、runtime health、release evidence 变成长期可追踪资产，而不是只在失败时被看到。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="panel">
+        <h2>一句结论</h2>
+        <p>
+          现在的 funfo AI Store，已经从“会生成页面的 AI 工具”长成了“有编排内核、有修复能力、有发布语义的 vibe coding 平台雏形”。
+          它最有价值的地方不再只是生成，而是 <b>app 可以被持续维护、持续修复、持续发布</b>。下一阶段最值得继续投的，就是把多文件工程能力和发布后观测能力做得更硬。
+        </p>
+      </div>
+    </section>
+
+    <div class="footer">
+      建议直接在浏览器打开这个文件查看：<code>/vibe-coding-platform-map.html</code>。
+      如果你继续要，我下一步可以把这张静态图再升级成一版“可点击展开节点”的交互式 HTML。
+    </div>
+  </div>
+</body>
+</html>

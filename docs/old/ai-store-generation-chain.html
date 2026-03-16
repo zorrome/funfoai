@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo_AI_Store 业务链路总览</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121933;
+      --panel-2: #182244;
+      --text: #edf2ff;
+      --muted: #aeb9d6;
+      --line: #2f3d72;
+      --accent: #7aa2ff;
+      --green: #26c281;
+      --amber: #ffb84d;
+      --red: #ff6b6b;
+      --pink: #ff7fd1;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: linear-gradient(180deg, #0b1020, #0f1730 35%, #0b1020);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .wrap {
+      width: min(1200px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 80px;
+    }
+    h1, h2, h3 { line-height: 1.2; margin: 0 0 12px; }
+    h1 { font-size: 34px; }
+    h2 { font-size: 24px; margin-top: 40px; }
+    h3 { font-size: 18px; }
+    p, li { color: var(--muted); }
+    .lead {
+      font-size: 16px;
+      color: #d9e2ff;
+      max-width: 980px;
+    }
+    .panel {
+      background: rgba(18, 25, 51, .92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.25);
+    }
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      margin-right: 8px;
+    }
+    .b-blue { background: rgba(122,162,255,.18); color: #bcd0ff; border: 1px solid rgba(122,162,255,.35); }
+    .b-green { background: rgba(38,194,129,.16); color: #baf5da; border: 1px solid rgba(38,194,129,.35); }
+    .b-amber { background: rgba(255,184,77,.14); color: #ffe0b0; border: 1px solid rgba(255,184,77,.35); }
+    .b-red { background: rgba(255,107,107,.14); color: #ffc0c0; border: 1px solid rgba(255,107,107,.35); }
+    .b-pink { background: rgba(255,127,209,.15); color: #ffd0ef; border: 1px solid rgba(255,127,209,.35); }
+    .flow {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .step {
+      position: relative;
+      padding: 16px 16px 16px 18px;
+      border-left: 3px solid var(--accent);
+      background: rgba(255,255,255,.02);
+      border-radius: 12px;
+    }
+    .step small { color: #8ea3da; }
+    code, pre {
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0a0f1f;
+      border: 1px solid #26345f;
+      border-radius: 12px;
+      padding: 14px;
+      color: #d7e3ff;
+      overflow: auto;
+    }
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+      margin-top: 12px;
+    }
+    .summary-table th, .summary-table td {
+      border: 1px solid var(--line);
+      padding: 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+    .summary-table th {
+      background: rgba(122,162,255,.12);
+      color: #dce7ff;
+      font-size: 13px;
+    }
+    .summary-table td { background: rgba(255,255,255,.02); color: var(--muted); }
+    .callout {
+      border: 1px solid rgba(255,184,77,.35);
+      background: rgba(255,184,77,.08);
+      color: #ffe6bd;
+      border-radius: 14px;
+      padding: 14px 16px;
+    }
+    .danger {
+      border-color: rgba(255,107,107,.35);
+      background: rgba(255,107,107,.08);
+      color: #ffd6d6;
+    }
+    .mini {
+      font-size: 13px;
+      color: #96a8d8;
+    }
+    .footer {
+      margin-top: 42px;
+      color: #90a0cb;
+      font-size: 13px;
+    }
+    @media (max-width: 900px) {
+      .grid.two, .grid.three { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div>
+        <span class="badge b-blue">funfo_AI_Store</span>
+        <span class="badge b-green">业务链路</span>
+        <span class="badge b-amber">提示词限制</span>
+      </div>
+      <h1>AI Store 生成 App 的完整业务逻辑与链条</h1>
+      <p class="lead">
+        这份文档是基于当前 <code>funfo_AI_Store</code> 代码整理出来的“真实链路图”。它覆盖：<b>首次生成、首次部署、迭代开发、迭代部署、回滚</b>，并把每个环节会影响生成能力/结构的限制提示词和守护逻辑一起标出来。
+      </p>
+      <div class="callout">
+        <b>先说结论：</b> 当前系统不是“完全自由生成器”，而是一个<strong>带强约束的工作流生成器</strong>：开发态偏前端优先，迭代态偏最小改动，部署态会补后端并做 DB/运行时校验，发布前还会对 release 做备份。<br/>
+        但我没有在当前代码里看到一个完整的“用户可直接点击回滚到某个 release backup”的正式 API/UI；现在更像是<strong>已做备份能力，但未完整产品化回滚入口</strong>。
+      </div>
+    </div>
+
+    <h2>0. 总体结构图</h2>
+    <div class="panel">
+      <div class="flow">
+        <div class="step"><b>创建 App</b> → <code>POST /api/apps</code> 创建一条 app 记录，初始没有版本、没有 preview、没有 backend。</div>
+        <div class="step"><b>在 Workspace 中对话生成</b> → <code>POST /api/apps/:id/chat</code> 调 OpenClaw 流式生成，先产出 JSX；必要时复用旧后端或保存版本。</div>
+        <div class="step"><b>保存工作版本</b> → 新增 <code>app_versions</code>，落盘前端/后端/SQL 文件，启动 preview，必要时启动 backend。</div>
+        <div class="step"><b>部署/发布</b> → <code>POST /api/apps/:id/publish</code> 异步发布，生成或复用 production backend，校验 DB，启动 Docker runtime，写入 release 新版本。</div>
+        <div class="step"><b>编辑已发布 App</b> → 不能直接改 release，先 <code>ensure-workspace-draft</code> 建一个 linked workspace draft，再继续开发。</div>
+        <div class="step"><b>保存草稿 / 部署覆盖</b> → draft 可以保持本地工作态；也可以 deploy 覆盖 release。覆盖前会做 release backup。</div>
+      </div>
+    </div>
+
+    <h2>1. 首次生成（First Generation）</h2>
+    <div class="grid two">
+      <div class="panel">
+        <h3>业务链条</h3>
+        <div class="flow">
+          <div class="step">
+            <small>入口</small><br/>
+            前端先调用 <code>POST /api/apps</code> 创建 app。初始 app 只有基础信息（name/icon/description），还没有版本。<br/>
+            然后在 Workspace 中输入需求，前端调用 <code>api.chat(appId, text)</code>。
+          </div>
+          <div class="step">
+            <small>发送生成请求</small><br/>
+            后端进入 <code>POST /api/apps/:id/chat</code>。若这是首次生成，通常没有历史版本/原始 JSX，因此“基于旧版本最小修改”的限制会弱很多。
+          </div>
+          <div class="step">
+            <small>模型输出</small><br/>
+            生成结果会被 <code>parseAIResponse</code> 解析成 <code>jsx / server / sql</code>。首次生成核心目标仍然是先得到可运行的前端 JSX。
+          </div>
+          <div class="step">
+            <small>保存版本</small><br/>
+            系统会新增一条 <code>app_versions</code> 记录，写入版本文件，启动 preview；如果有可用 backend，也可能同时启动 backend runtime。
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>首次生成阶段的限制</h3>
+        <table class="summary-table">
+          <tr><th>限制</th><th>影响</th></tr>
+          <tr><td><b>DEV_FRONTEND_FIRST_MODE</b></td><td>只要 app 还处在开发态（<code>runtime_mode === local</code> 或 <code>status !== published</code>），就会偏向“先生成前端 JSX，不先生成 backend / SQL”。</td></tr>
+          <tr><td><b>流式输出要求</b></td><td>要求模型尽快开始输出 <code>```jsx</code> 代码块，方便编辑器边生成边显示。</td></tr>
+          <tr><td><b>Phase-A 校验</b></td><td>即使是首次生成，也要先过一轮前端可运行性校验；失败就不进入预览。</td></tr>
+          <tr><td><b>设计 token 重试</b></td><td>如果 prompt 中有指定风格 token，生成后还会再检查一次，不满足就 restyle retry。</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <h3>首次生成时最关键的限制提示词</h3>
+      <pre>[DEV_FRONTEND_FIRST_MODE]
+Development phase is frontend-first. Generate frontend JSX only.
+Do NOT generate backend routes or SQL in this phase.
+When streaming, start outputting the main App code immediately inside a ```jsx block
+so the editor can show code being written live.</pre>
+      <p class="mini">触发条件：<code>runtime_mode === 'local'</code> 或 app 不是 <code>published</code>。首次生成几乎天然命中。</p>
+    </div>
+
+    <h2>2. 首次部署（First Deploy）</h2>
+    <div class="grid two">
+      <div class="panel">
+        <h3>业务链条</h3>
+        <div class="flow">
+          <div class="step"><small>入口</small><br/>前端点击 Deploy / 发布，调用 <code>POST /api/apps/:id/publish</code>。</div>
+          <div class="step"><small>异步发布任务</small><br/>后端把 app 的 <code>publish_status</code> 标为 <code>publishing</code>，创建 publish job，再异步执行 <code>processPublishJob()</code>。</div>
+          <div class="step"><small>检查前端</small><br/>先确认当前最新版本里有 frontend code；如果没有，会直接报错：<code>公開前にフロントエンドを生成してください</code>。</div>
+          <div class="step"><small>生成/复用 backend</small><br/>首次部署通常没有可复用的已发布 backend，因此更可能进入“为发布生成 production backend”的路径。</div>
+          <div class="step"><small>DB 检查</small><br/>执行 <code>validatePublishSchemaSafety()</code>，在临时 SQLite 上尝试应用 schema，检查生产 DB 相容性。</div>
+          <div class="step"><small>Docker 启动</small><br/>调用 <code>deployAppBackend()</code>，启动容器/服务；随后等待 health check。</div>
+          <div class="step"><small>写入 release 版本</small><br/>发布成功后，release app 新增一条 <code>publish vN</code> 版本，状态设为 <code>published</code>、<code>runtime_mode=server</code>。</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>首次部署阶段的限制</h3>
+        <table class="summary-table">
+          <tr><th>限制</th><th>影响</th></tr>
+          <tr><td><b>必须先有前端</b></td><td>没有 frontend code，不能部署。</td></tr>
+          <tr><td><b>生产 backend prompt</b></td><td>部署时会重新针对前端生成 production backend，而不是完全相信开发态结果。</td></tr>
+          <tr><td><b>API contract 对齐</b></td><td>要求 backend 跟 frontend fetch 使用的接口保持一致。</td></tr>
+          <tr><td><b>DB schema safety</b></td><td>发布前必须过 schema 安全检查。</td></tr>
+          <tr><td><b>运行时健康检查</b></td><td>Docker 和 preview 都要实际可达，否则发布失败。</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <h3>首次部署时最关键的限制提示词</h3>
+      <pre>Generate production backend for this frontend app.
+Rules:
+- Return backend only in ```javascript server block
+- Optionally return schema in ```sql block
+- Keep API contracts aligned with frontend fetch usage
+- No markdown explanation outside code blocks</pre>
+      <p class="mini">这是部署态的后端补全 prompt。它把模型从“开发态先做前端”切换成“发布态补生产后端”。</p>
+    </div>
+
+    <h2>3. 迭代开发（Iteration Development）</h2>
+    <div class="grid two">
+      <div class="panel">
+        <h3>业务链条</h3>
+        <div class="flow">
+          <div class="step"><small>编辑 published app</small><br/>如果你点的是已发布 release，系统不允许直接改 release，而是返回 <code>RELEASE_EDIT_REDIRECT</code>，要求先开 workspace draft。</div>
+          <div class="step"><small>建立 linked workspace draft</small><br/>调用 <code>POST /api/apps/:id/ensure-workspace-draft</code>，系统会复制 release 的版本链、文件、文档、必要时连 backend 都一起克隆到 draft。</div>
+          <div class="step"><small>继续在 draft 中对话</small><br/>之后所有迭代修改都在 draft / workspace 里完成，调用的仍然是 <code>/api/apps/:id/chat</code>。</div>
+          <div class="step"><small>保存新版本</small><br/>每次成功生成都会产生新的 <code>app_versions</code>；preview 也会更新，必要时复用上一版 backend 或新部署 backend。</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>迭代开发阶段最强的限制</h3>
+        <table class="summary-table">
+          <tr><th>限制</th><th>影响</th></tr>
+          <tr><td><b>MUST_EDIT_FROM_ORIGINAL_VERSION</b></td><td>强制基于当前原始版本改，禁止轻易整页重写。</td></tr>
+          <tr><td><b>ITERATION_BASELINE</b></td><td>要求遵守 APP_SPEC，保留旧能力和兼容性。</td></tr>
+          <tr><td><b>API_CONTRACT_BASELINE</b></td><td>不能轻易破坏已有 API 结构。</td></tr>
+          <tr><td><b>DB_SCHEMA_BASELINE</b></td><td>数据库修改应尽量 additive / non-destructive。</td></tr>
+          <tr><td><b>allowed change ratio</b></td><td>若改动幅度过大，系统会触发一次“最小改动重试”。</td></tr>
+          <tr><td><b>workspace early validation</b></td><td>如果判断成 destructive rewrite，会直接拦截。</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid two" style="margin-top:16px;">
+      <div class="panel">
+        <h3>迭代开发限制提示词（基线类）</h3>
+        <pre>[MUST_EDIT_FROM_ORIGINAL_VERSION]
+You MUST modify based on the original current version code below.
+Do not rewrite whole app.
+Do not remove existing features unless user explicitly asks.
+Keep unchanged sections as-is.</pre>
+        <pre>[ITERATION_BASELINE]
+Read and follow this APP_SPEC baseline strictly.
+Preserve old features/APIs/data compatibility unless explicitly requested.</pre>
+        <pre>[API_CONTRACT_BASELINE]
+Follow this API contract baseline.
+Keep routes compatible and do not remove old APIs unless explicitly requested.</pre>
+        <pre>[DB_SCHEMA_BASELINE]
+Follow this DB schema baseline.
+Use additive, non-destructive changes only.</pre>
+      </div>
+      <div class="panel">
+        <h3>迭代开发限制提示词（收敛类）</h3>
+        <pre>You are updating an existing app. Do MINIMAL CHANGES only.
+Rules:
+- Keep unchanged code lines exactly as-is whenever possible
+- Only edit the smallest necessary sections to satisfy the new request
+- Do NOT rename unrelated variables/components
+- Do NOT reorder unrelated blocks
+- Return complete JSX only in a jsx code block</pre>
+        <pre>Restyle the following JSX to match the selected design paradigm.
+Rules:
+- Keep business logic and API endpoints unchanged
+- Rewrite only UI structure/className to satisfy design tokens
+- Must include ALL tokens: ...</pre>
+      </div>
+    </div>
+
+    <h2>4. 迭代部署（Iteration Deploy / Draft 覆盖 Release）</h2>
+    <div class="grid two">
+      <div class="panel">
+        <h3>业务链条</h3>
+        <div class="flow">
+          <div class="step"><small>前提</small><br/>你编辑的是 linked workspace draft，而不是 release 本体。</div>
+          <div class="step"><small>保存草稿</small><br/>点“保存草稿”时只是 <code>POST /api/apps/:id/save-draft</code>，把当前 draft 维持在 <code>status=draft</code>、<code>runtime_mode=local</code>，不会覆盖 release。</div>
+          <div class="step"><small>部署覆盖</small><br/>点 deploy 时仍然走 <code>/publish</code>，但 <code>getEffectiveReleaseAppId(appRow)</code> 会把目标 release 找出来。</div>
+          <div class="step"><small>先做 release backup</small><br/>如果当前 app 是 workspace draft，发布前会执行 <code>createReleaseBackupSnapshot(releaseAppId, appId)</code>，把 release 当前状态做快照备份。</div>
+          <div class="step"><small>生成/复用发布后端</small><br/>系统会判断是否可以复用之前发布的 backend；不行就重新生成 production backend。</div>
+          <div class="step"><small>健康检查通过后写回 release</small><br/>发布成功后，不是把 draft 变 published，而是把结果写进 release app 的新版本里。</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>迭代部署的核心限制</h3>
+        <table class="summary-table">
+          <tr><th>限制</th><th>影响</th></tr>
+          <tr><td><b>不能直接改 release</b></td><td>必须先转 workspace draft。</td></tr>
+          <tr><td><b>draft / release 分离</b></td><td>保存草稿与部署覆盖是两套动作，草稿不会自动覆盖线上。</td></tr>
+          <tr><td><b>发布前 backup</b></td><td>每次 draft 覆盖 release 前，都会给 release 做备份快照。</td></tr>
+          <tr><td><b>可复用发布 backend</b></td><td>如果 API/DB 没变，系统会尽量复用上次发布 backend，减少不必要的重建。</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <h2>5. 回滚（Rollback）</h2>
+    <div class="panel danger">
+      <h3>当前代码里的真实状态</h3>
+      <p>
+        <b>我在当前代码里看到了“发布前自动备份 release”的能力，但没有看到一个完整、公开的“回滚到指定 backup” API/UI 链路。</b>
+      </p>
+      <ul>
+        <li>有 <code>app_release_backups</code> 表的写入逻辑。</li>
+        <li>有 <code>createReleaseBackupSnapshot(releaseAppId, sourceDraftAppId)</code>，会在 draft 覆盖 release 前存：name / icon / description / color / code / server_code / sql_code。</li>
+        <li>但我没有在当前代码里搜到一个完整的 <code>/rollback</code> 或 restore backup 路由，也没看到前端明确的回滚按钮业务闭环。</li>
+      </ul>
+    </div>
+
+    <div class="grid two" style="margin-top:16px;">
+      <div class="panel">
+        <h3>现在“已实现”的回滚基础</h3>
+        <div class="flow">
+          <div class="step">每次迭代部署覆盖 release 前，系统会给 release 做一次 backup snapshot。</div>
+          <div class="step">release 本身也会保留 <code>app_versions</code> 历史。</div>
+          <div class="step">这意味着从“数据基础”上，系统已经具备回滚素材。</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>现在“未闭环”的部分</h3>
+        <div class="flow">
+          <div class="step">没有找到明确的回滚入口 API。</div>
+          <div class="step">没有看到用户选择某个 backup 后一键恢复 release 的流程。</div>
+          <div class="step">所以当前更准确的说法是：<b>有备份机制，但回滚产品链路未完整开放</b>。</div>
+        </div>
+      </div>
+    </div>
+
+    <h2>6. 五段链路总表</h2>
+    <div class="panel">
+      <table class="summary-table">
+        <tr>
+          <th>阶段</th>
+          <th>核心接口 / 函数</th>
+          <th>主要动作</th>
+          <th>最关键限制</th>
+        </tr>
+        <tr>
+          <td>1. 首次生成</td>
+          <td><code>POST /api/apps</code><br/><code>POST /api/apps/:id/chat</code></td>
+          <td>创建 app → 对话生成 → 保存第一版 JSX/版本/预览</td>
+          <td><code>DEV_FRONTEND_FIRST_MODE</code>，优先前端，不先做 backend / SQL</td>
+        </tr>
+        <tr>
+          <td>2. 首次部署</td>
+          <td><code>POST /api/apps/:id/publish</code><br/><code>processPublishJob()</code></td>
+          <td>补 production backend → DB 检查 → Docker 启动 → 发布成功</td>
+          <td>必须先有前端；部署态 backend prompt；schema safety；health check</td>
+        </tr>
+        <tr>
+          <td>3. 迭代开发</td>
+          <td><code>ensure-workspace-draft</code><br/><code>/chat</code></td>
+          <td>已发布 app 先转 draft → 在 draft 里继续改</td>
+          <td><code>MUST_EDIT_FROM_ORIGINAL_VERSION</code>、APP/API/DB 基线、最小改动重试、destructive rewrite 拦截</td>
+        </tr>
+        <tr>
+          <td>4. 迭代部署</td>
+          <td><code>/save-draft</code><br/><code>/publish</code></td>
+          <td>保存 draft 不覆盖 → 部署时覆盖 release</td>
+          <td>发布前先 backup；draft / release 分离；可复用已发布 backend</td>
+        </tr>
+        <tr>
+          <td>5. 回滚</td>
+          <td><code>createReleaseBackupSnapshot()</code></td>
+          <td>当前已有备份数据基础</td>
+          <td>未看到完整 rollback API/UI 闭环</td>
+        </tr>
+      </table>
+    </div>
+
+    <h2>7. 你最该关注的产品判断</h2>
+    <div class="grid three">
+      <div class="panel">
+        <h3>首次生成偏弱点</h3>
+        <p>不是不会生成，而是很容易被“前端优先模式”收窄成先做壳子、先做 JSX。</p>
+      </div>
+      <div class="panel">
+        <h3>迭代开发偏保守</h3>
+        <p>当前最明显是“不要重写、尽量兼容、尽量小改”，所以做大重构会有天然摩擦。</p>
+      </div>
+      <div class="panel">
+        <h3>部署链条最完整</h3>
+        <p>发布态其实相对成熟：后端补全、DB 校验、Docker 启动、运行时检查、版本写回都已经在了。</p>
+      </div>
+    </div>
+
+    <div class="footer">
+      说明：本页基于当前代码行为整理，不代表未来产品目标。若你要，我下一步可以继续把这份 HTML 再升级成“泳道图 + 状态机图 + 每个接口源码引用”的版本。
+    </div>
+  </div>
+</body>
+</html>

@@ -68,19 +68,18 @@ function autoEmoji(text: string): string {
   return fallback[Math.floor(Math.random() * fallback.length)];
 }
 
-function autoColorId(text: string): string {
-  const lower = text.toLowerCase();
-  if (/売上|収益|profit/.test(lower))    return 'indigo';
-  if (/シフト|勤務|schedule/.test(lower)) return 'blue';
-  if (/在庫|stock|inventory/.test(lower)) return 'teal';
-  if (/経費|コスト|cost/.test(lower))    return 'amber';
-  if (/顧客|会員|crm/.test(lower))       return 'pink';
-  if (/メニュー|food|料理/.test(lower))  return 'rose';
-  return 'indigo';
+function autoColorId(_text: string): string {
+  const neutral = ['slate', 'blue', 'cyan', 'amber', 'rose', 'teal'];
+  return neutral[Math.floor(Math.random() * neutral.length)];
 }
 
 interface PublishDialogProps {
   open: boolean;
+  mode?: 'edit' | 'publish';
+  routeSummary?: string;
+  actionLabel?: string;
+  validationSummary?: string;
+  validationItems?: string[];
   onClose: () => void;
   onConfirm: (name: string, description: string, icon: string, color: string) => void;
   initialName?: string;
@@ -90,9 +89,9 @@ interface PublishDialogProps {
 }
 
 export default function PublishDialog({
-  open, onClose, onConfirm,
+  open, mode = 'edit', routeSummary = '', actionLabel = '', validationSummary = '', validationItems = [], onClose, onConfirm,
   initialName = '', initialDescription = '',
-  initialIcon = '✨', initialColor = 'indigo',
+  initialIcon = '✨', initialColor = 'slate',
 }: PublishDialogProps) {
   const [name,        setName]        = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
@@ -107,7 +106,7 @@ export default function PublishDialog({
       setName(initialName);
       setDescription(initialDescription);
       setIcon(initialIcon || '✨');
-      setColorId(initialColor || 'indigo');
+      setColorId(initialColor || 'slate');
       setShowEmojis(false);
       setAiRunning(false);
     }
@@ -139,11 +138,24 @@ export default function PublishDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Check className="w-5 h-5 text-primary" />
-            アプリ属性を保存
+            {mode === 'publish' ? '确认信息并发布' : '保存应用信息'}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-5 py-2">
+          {mode === 'publish' && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 space-y-2">
+              <div className="font-semibold">发布过程</div>
+              {actionLabel ? <div className="text-xs font-medium text-amber-950">{actionLabel}</div> : null}
+              <div>{routeSummary || '保存当前信息后，系统会先完成发布验证，再更新线上版本。'}</div>
+              {validationSummary ? <div className="text-xs text-amber-950/90">{validationSummary}</div> : null}
+              {!!validationItems.length && (
+                <ul className="m-0 pl-5 space-y-1 text-xs text-amber-950/90">
+                  {validationItems.map(item => <li key={item}>{item}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
 
           {/* ── Icon preview + AI button ─────────────────────────── */}
           <div className="flex items-center gap-4 p-4 rounded-xl bg-slate-50 border">
@@ -270,7 +282,7 @@ export default function PublishDialog({
             className="gap-2 text-white border-0 px-6"
             style={{ backgroundColor: currentColor.hex }}>
             <Check className="w-4 h-4" />
-            保存する
+            {mode === 'publish' ? '立即发布' : '保存信息'}
           </Button>
         </DialogFooter>
       </DialogContent>

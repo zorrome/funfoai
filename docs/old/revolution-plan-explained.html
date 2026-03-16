@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store 革命性迭代计划说明</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #0f172a; }
+    .wrap { max-width: 1280px; margin: 24px auto; padding: 0 16px 48px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 8px 24px rgba(15,23,42,.04); }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    h2 { margin: 0 0 10px; font-size: 20px; }
+    h3 { margin: 0 0 8px; font-size: 16px; }
+    p, li { color: #334155; line-height: 1.7; }
+    .muted { color: #64748b; font-size: 14px; }
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; margin-right: 8px; }
+    .bad { background: #fee2e2; color: #b91c1c; }
+    .good { background: #dcfce7; color: #166534; }
+    .mid { background: #fef3c7; color: #92400e; }
+    .blue { background: #dbeafe; color: #1d4ed8; }
+    .flow { border: 1px dashed #cbd5e1; border-radius: 14px; padding: 14px; background: #f8fafc; }
+    .step { background: white; border: 1px solid #dbe3ee; border-radius: 12px; padding: 14px; margin: 10px 0; }
+    .arrow { text-align: center; color: #64748b; font-size: 20px; margin: 6px 0; }
+    .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .left { border-left: 4px solid #f87171; }
+    .right { border-left: 4px solid #4ade80; }
+    .kpi { background: linear-gradient(135deg,#eff6ff,#f8fafc); border: 1px solid #dbeafe; border-radius: 14px; padding: 16px; }
+    code { background: #eff1f5; padding: 2px 6px; border-radius: 8px; font-size: 13px; }
+    @media (max-width: 900px) {
+      .grid2, .grid3, .compare { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>funfo AI Store：革命性迭代计划说明</h1>
+      <div class="muted">目标版本基线：0.69.3A ｜ 目的：让发布系统从“复杂、混合、容易歧义失败”收敛为“简单、稳定、可预测、可回滚”。</div>
+    </div>
+
+    <div class="card">
+      <h2>一句话总结：接下来到底会发生什么变化？</h2>
+      <p>我们不会继续无限堆“自动修复”和“复杂验证”，而是把整个发布系统改造成一个更像正式产品的发布架构：</p>
+      <ul>
+        <li><strong>开发态</strong> 和 <strong>长期态</strong> 彻底分开</li>
+        <li>新版本先进入 <code>candidate</code>，不是直接冒充已上线版本</li>
+        <li>只有验证通过，才会晋升成 <code>live</code></li>
+        <li>验证失败会 <strong>回滚或停止</strong>，不再把失败版本继续挂在线上</li>
+        <li>UI 会明确告诉你：现在是 <strong>Draft / Candidate / Live / Failed</strong> 哪一种</li>
+      </ul>
+    </div>
+
+    <div class="compare">
+      <div class="card left">
+        <h2>现在的逻辑</h2>
+        <div class="pill bad">复杂</div><div class="pill bad">混合</div><div class="pill bad">容易歧义</div>
+        <ul>
+          <li>发布时会同时做生成、部署、验证、修复、状态回写</li>
+          <li>长期化 app 虽然越来越 Docker 化，但历史上混用了 preview 和 live 逻辑</li>
+          <li>有时 <strong>Docker 已启动、页面能打开</strong>，但系统仍显示 <strong>发布失败</strong></li>
+          <li>用户需要猜：<code>status + publish_status + app_stage + runtime_mode</code> 才知道现在是什么状态</li>
+          <li>Verifier 阻塞项偏多，容易把“可用但不完美”的 app 判失败</li>
+        </ul>
+      </div>
+      <div class="card right">
+        <h2>将来的逻辑</h2>
+        <div class="pill good">简单</div><div class="pill good">单义</div><div class="pill good">可回滚</div>
+        <ul>
+          <li>发布流程改成清晰的 <strong>candidate → verify → promote live</strong></li>
+          <li>失败版本不会污染现网</li>
+          <li>UI 只需要看一个统一状态：<code>release_state</code></li>
+          <li>Verifier 只阻止真正不能上线的问题</li>
+          <li>运行状态和发布状态分开表达，不再混淆</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>核心变化 1：状态模型会怎么变？</h2>
+      <div class="grid2">
+        <div class="kpi">
+          <h3>现在</h3>
+          <p>系统主要靠下面这些字段组合表达状态：</p>
+          <ul>
+            <li><code>status</code></li>
+            <li><code>publish_status</code></li>
+            <li><code>app_stage</code></li>
+            <li><code>runtime_mode</code></li>
+          </ul>
+          <p>问题是：用户看不懂，UI 也容易解释错。</p>
+        </div>
+        <div class="kpi">
+          <h3>将来</h3>
+          <p>统一收敛成一个用户可理解的状态：</p>
+          <ul>
+            <li><code>draft</code>：开发中</li>
+            <li><code>candidate</code>：正在验证的新发布版本</li>
+            <li><code>live</code>：已正式上线</li>
+            <li><code>failed</code>：发布失败，未上线</li>
+          </ul>
+          <p>你以后不需要猜组合状态，只看一个 <code>release_state</code>。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>核心变化 2：发布流程会怎么变？</h2>
+      <div class="flow">
+        <div class="step"><strong>现在：</strong> 生成代码 → 启动 Docker → health check → verifier → 失败时可能 runtime 还留着</div>
+        <div class="arrow">↓</div>
+        <div class="step"><strong>问题：</strong> 可能出现“页面能打开，但系统说发布失败”的矛盾体验</div>
+      </div>
+      <div style="height:14px"></div>
+      <div class="flow">
+        <div class="step"><strong>未来：</strong> 生成代码 → 部署 candidate runtime</div>
+        <div class="arrow">↓</div>
+        <div class="step"><strong>health_check：</strong> 只检查这个 candidate 是否真的能跑起来</div>
+        <div class="arrow">↓</div>
+        <div class="step"><strong>verifier：</strong> 检查这个 candidate 是否满足最低上线标准</div>
+        <div class="arrow">↓</div>
+        <div class="step"><strong>通过：</strong> promote 为 live</div>
+        <div class="arrow">↓</div>
+        <div class="step"><strong>失败：</strong> rollback 到上一个 live，或者 stop candidate</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>核心变化 3：Verifier 会怎么改？</h2>
+      <div class="grid2">
+        <div>
+          <h3>现在的问题</h3>
+          <ul>
+            <li>Verifier 太像“理想工程审查官”</li>
+            <li>会检查 artifact、contract、schema、auth smoke、行为等很多东西</li>
+            <li>容易把“能正常用”的 app 卡在发布门外</li>
+          </ul>
+        </div>
+        <div>
+          <h3>未来的变化</h3>
+          <ul>
+            <li>只保留真正阻止上线的 <strong>blocking checks</strong></li>
+            <li>把大量“质量建议”降级成 <strong>warning</strong></li>
+            <li>目标不是“完美发布”，而是“稳定发布”</li>
+          </ul>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="card" style="margin:0;background:#fffaf0">
+          <h3>会继续阻止上线的检查</h3>
+          <ul>
+            <li>runtime 是否能启动</li>
+            <li><code>/health</code> 是否正常</li>
+            <li><code>/app/&lt;slug&gt;/</code> 是否真的可访问</li>
+            <li>prod db mode 是否正确</li>
+            <li>核心 API 是否存在</li>
+          </ul>
+        </div>
+        <div class="card" style="margin:0;background:#f8fafc">
+          <h3>会尽量变成 warning 的检查</h3>
+          <ul>
+            <li>localStorage / mock 风格问题</li>
+            <li>schema 命名和风格问题</li>
+            <li>产物不够整洁</li>
+            <li>某些非关键行为 smoke</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>核心变化 4：开发态和长期态会怎么分离？</h2>
+      <div class="grid3">
+        <div class="card" style="margin:0">
+          <h3>开发态</h3>
+          <ul>
+            <li>Workspace</li>
+            <li>preview-manager</li>
+            <li>允许快速迭代</li>
+            <li>允许暂时不完美</li>
+          </ul>
+        </div>
+        <div class="card" style="margin:0">
+          <h3>长期态</h3>
+          <ul>
+            <li>Full Docker Runtime</li>
+            <li>前端+后端同一 app 容器</li>
+            <li>通过网关 <code>/app/&lt;slug&gt;</code> 访问</li>
+            <li>按 live/candidate 管理</li>
+          </ul>
+        </div>
+        <div class="card" style="margin:0">
+          <h3>变化重点</h3>
+          <ul>
+            <li>preview 不再假装是 live</li>
+            <li>长期化 app 不再混用 preview 逻辑</li>
+            <li>restart / restore / wake / sleep 都按模式处理</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>用户会实际感觉到哪些变化？</h2>
+      <ul>
+        <li>发布状态会更清楚，不再出现“明明打开了却说失败”的强烈困惑</li>
+        <li>My Apps / Admin 会直接告诉你这是 <strong>Draft / Candidate / Live / Failed</strong></li>
+        <li>失败版本不会继续伪装成上线版本</li>
+        <li>发布失败原因会更聚焦在真正阻塞上线的问题</li>
+        <li>成功发布会变得更稳定，而不是靠连续 repair 碰运气</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>从你的角度，最大的变化是什么？</h2>
+      <p>以前系统更像：<strong>尽量把所有事情都自动搞定</strong>。</p>
+      <p>以后系统会更像：<strong>把发布这件事做得稳定、单义、能回滚</strong>。</p>
+      <p>这意味着：</p>
+      <ul>
+        <li>少一点“神奇自动修复”</li>
+        <li>多一点“发布结果明确可预期”</li>
+        <li>少一点复杂隐藏逻辑</li>
+        <li>多一点正式发布系统该有的边界</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>当前执行顺序</h2>
+      <ol>
+        <li><strong>R1</strong>：状态模型收敛（已开始，先引入统一 <code>release_state</code>）</li>
+        <li><strong>R2</strong>：发布链路收敛（candidate / promote / rollback）</li>
+        <li><strong>R3</strong>：Verifier 降级为最小阻塞模型</li>
+        <li><strong>R4</strong>：开发态 / 长期态彻底分离</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>

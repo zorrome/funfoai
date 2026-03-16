@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>系统层：App 迭代 → 迭代发布完成</title><style>body{font:15px/1.75 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,PingFang SC,Helvetica,Arial,sans-serif;background:#f8fafc;color:#1e293b;margin:0}.wrap{max-width:1100px;margin:0 auto;padding:32px 20px 72px}.hero{background:linear-gradient(135deg,#111827,#0f766e);color:#fff;padding:28px;border-radius:20px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:22px;margin-top:18px}.flow{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:14px;padding:14px 16px}.pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#ccfbf1;color:#0f766e;font-size:12px;font-weight:700}.warn{background:#fef3c7;color:#92400e}.muted{color:#64748b} code{background:#f1f5f9;padding:2px 6px;border-radius:6px}</style></head><body><div class="wrap">
+<section class="hero"><div class="pill">V10 迭代视角</div><h1>系统层：App 迭代 → 迭代发布完成</h1><p class="muted" style="color:rgba(255,255,255,.82)">本文讨论的是：已有 live app 被继续编辑时，系统层如何处理 linked draft、Candidate、发布验证以及 promote。</p></section>
+<section class="card"><h2>1. 当前推荐的迭代形态</h2><ul>
+<li>已有 live app 不应直接编辑上线版本本体。</li>
+<li>应从 live 派生出 linked workspace draft。</li>
+<li>draft 是升级工作区，live 是线上运行实体。</li>
+<li>draft 在验证成功前，不应影响 live 运行。</li>
+</ul></section>
+<section class="card"><h2>2. 迭代系统流程</h2><div class="flow">Live app → <code>/ensure-workspace-draft</code> 创建/获取 linked draft → 在 draft 中开发与保存 → Draft 发起 Candidate 发布 → Candidate 验证 → 通过后 promote 到 live → draft 进入已完成/归档语义</div></section>
+<section class="card"><h2>3. 关键系统点</h2><h3>3.1 linked draft 创建</h3><ul><li>入口：<code>/api/apps/:id/ensure-workspace-draft</code></li><li>要求来源必须是 live release。</li><li>draft 会携带 <code>release_app_id</code> 指向原 live app。</li></ul><h3>3.2 draft 工作期</h3><ul><li>draft 内继续聊天开发、保存版本、预览、保存 draft。</li><li>此阶段本质上是“升级工作区”。</li></ul><h3>3.3 迭代发布</h3><ul><li>发布入口仍走统一 publish pipeline。</li><li>但对于 workspace draft，当前版本已经开始改成：先在 draft runtime 上进行 candidate 验证，再 promote 到 live。</li></ul></section>
+<section class="card"><h2>4. 为什么必须隔离 draft 与 live</h2><ul>
+<li>如果 draft 发布失败直接影响 live runtime，就等于把升级工作区和线上系统绑死。</li>
+<li>正确做法是：<b>draft 先自证可运行，再切换 live</b>。</li>
+<li>这也是 V10 升级发布模型成立的前提。</li>
+</ul><p class="muted">当前代码已经做过一轮关键修复，把 candidate runtime / prod DB 操作尽量先落到 draft 本身，再在 verify 成功后 promote。</p></section>
+<section class="card"><h2>5. 当前版本下的 promote 时序</h2><ul>
+<li>draft 产生产物（frontend/backend/sql）</li>
+<li>启动 candidate runtime</li>
+<li>应用 schema / 做 runtime health</li>
+<li>做 verifier</li>
+<li>通过后把版本产物写入 release app</li>
+<li>部署 release runtime</li>
+<li>最终校验后标记 live</li>
+</ul></section>
+<section class="card"><h2>6. 迭代完成后的状态理解</h2><ul>
+<li>对用户来说：draft 可以“消失”或隐藏。</li>
+<li>对系统来说：更合理的是进入 merged / archived 语义，而不是真删除。</li>
+<li>这有助于追踪本轮升级是如何形成的。</li>
+</ul></section>
+</div></body></html>

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store · V10 Current Assessment · 0.69.4C</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --text: #16202a;
+      --muted: #5b6777;
+      --line: #dbe2ea;
+      --blue: #2563eb;
+      --blue-bg: #eff6ff;
+      --green: #16a34a;
+      --green-bg: #f0fdf4;
+      --amber: #d97706;
+      --amber-bg: #fffbeb;
+      --red: #dc2626;
+      --red-bg: #fef2f2;
+      --slate: #334155;
+      --purple: #7c3aed;
+      --purple-bg: #f5f3ff;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+    .hero { background: linear-gradient(135deg, #0f172a, #1e293b); color: #fff; border-radius: 18px; padding: 28px; margin-bottom: 22px; }
+    .hero h1 { margin: 0 0 8px; font-size: 30px; }
+    .hero p { margin: 0; color: rgba(255,255,255,.82); }
+    .meta { margin-top: 14px; font-size: 13px; color: rgba(255,255,255,.72); }
+    .grid { display: grid; gap: 18px; }
+    .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+    @media (max-width: 900px) { .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; } }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+    h2 { margin: 0 0 12px; font-size: 20px; }
+    h3 { margin: 0 0 10px; font-size: 16px; }
+    p { margin: 0 0 10px; color: var(--muted); }
+    ul { margin: 8px 0 0 18px; padding: 0; }
+    li { margin: 6px 0; color: var(--muted); }
+    .score { display: flex; align-items: center; gap: 16px; }
+    .score-num { font-size: 52px; font-weight: 800; line-height: 1; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .pill.green { color: var(--green); background: var(--green-bg); }
+    .pill.amber { color: var(--amber); background: var(--amber-bg); }
+    .pill.red { color: var(--red); background: var(--red-bg); }
+    .pill.blue { color: var(--blue); background: var(--blue-bg); }
+    .pill.purple { color: var(--purple); background: var(--purple-bg); }
+    .kpi { font-size: 13px; color: var(--muted); }
+    .table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    .table th, .table td { text-align: left; border-bottom: 1px solid var(--line); padding: 10px 8px; vertical-align: top; }
+    .table th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #64748b; }
+    .table td { font-size: 14px; }
+    .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+    .step { padding: 8px 12px; border-radius: 10px; font-size: 13px; font-weight: 700; background: var(--blue-bg); color: var(--blue); }
+    .arrow { color: #94a3b8; }
+    .note { border-left: 4px solid var(--blue); background: #f8fbff; padding: 12px 14px; border-radius: 10px; color: var(--muted); }
+    code { background: #f1f5f9; padding: 2px 6px; border-radius: 6px; font-size: 12px; }
+    .footer { margin-top: 22px; color: #64748b; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>V10 现状评估 · 0.69.4C</h1>
+      <p>结论：V10 已经进入“主干成型、关键链路可跑、但还没完全收口”的阶段。不是概念版了，也还不是完全稳定的产品版。</p>
+      <div class="meta">评估对象：funfo AI Store · 当前容器化版本 0.69.4C / 当前代码基线约为 bc3b53cc～9b804c05 之间</div>
+    </section>
+
+    <section class="grid cols-3">
+      <div class="card">
+        <div class="score">
+          <div class="score-num">7.8</div>
+          <div>
+            <div class="pill blue">当前评分 / 10</div>
+            <div class="kpi" style="margin-top:8px;">已经具备 V10 骨架和主要发布能力，但离“收口完成”还有一段。</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>总体判断</h3>
+        <p><span class="pill green">方向正确</span> 当前演进没有偏离 V10，反而在往 V10 的真实落地靠拢。</p>
+        <p><span class="pill amber">仍有技术债</span> 流程层已收敛，但底层 phase / verifier / 文档迁移仍是混合态。</p>
+      </div>
+      <div class="card">
+        <h3>一句话总结</h3>
+        <p>现在的版本已经不是“旧逻辑披着新 UI”，而是开始出现真正的 <strong>Candidate → Verify → Live</strong> 主干；但离“V10 完整收口”还差最后几步系统化整理。</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>1. 我认为 V10 已经完成了什么</h2>
+      <table class="table">
+        <thead>
+          <tr><th>模块</th><th>现状</th><th>评估</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>发布主流程</td>
+            <td>已经存在 Candidate / verify / completion 的真实发布链路，且 UI 主步骤已从旧 7 步收敛为 4 步。</td>
+            <td><span class="pill green">基本成立</span></td>
+          </tr>
+          <tr>
+            <td>发布验证</td>
+            <td>已有 verifier，失败时会进入 failed / repair / retry 相关分支，不再完全靠黑盒上线。</td>
+            <td><span class="pill green">基本成立</span></td>
+          </tr>
+          <tr>
+            <td>发布前约束</td>
+            <td>release prompt 已明确约束 SQL：单条完整 SQL、禁止 JS 拼接；validation 也加了 lint gate。</td>
+            <td><span class="pill green">明显增强</span></td>
+          </tr>
+          <tr>
+            <td>发布失败可解释性</td>
+            <td>dry-run 报错已经比以前清晰，至少开始区分 SQL 拼接类错误。</td>
+            <td><span class="pill amber">部分达成</span></td>
+          </tr>
+          <tr>
+            <td>文档基线</td>
+            <td>APP_SPEC / API_CONTRACT / DB_SCHEMA / RELEASE_REPORT 等已开始统一归到 <code>docs/</code>。</td>
+            <td><span class="pill amber">主方向正确</span></td>
+          </tr>
+          <tr>
+            <td>Docker 固化</td>
+            <td>当前版本已经重新 build 并用新镜像 recreate，不再只是临时 docker cp 热补。</td>
+            <td><span class="pill green">已完成</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>2. 我认为 V10 还没完全完成的部分</h2>
+      <div class="grid cols-2">
+        <div>
+          <h3>2.1 流程表层已是 V10，底层 phase 还没完全收口</h3>
+          <ul>
+            <li>用户可见步骤已经是 4 步，但底层 pipeline / verifier / failure typing 里仍保留旧 phase 痕迹。</li>
+            <li>这不影响当前能跑，但说明“V10 UI”与“V10 内核”还没百分百同构。</li>
+          </ul>
+        </div>
+        <div>
+          <h3>2.2 failed / repair / republish 的产品边界仍略混</h3>
+          <ul>
+            <li>你们已经明确“不在 release 阶段偷偷修复”，这是对的。</li>
+            <li>但 repair、failed、republish 之间的行为定义还在持续打磨，说明这块还没完全定型。</li>
+          </ul>
+        </div>
+        <div>
+          <h3>2.3 文档目录收敛完成了第一步，不是最后一步</h3>
+          <ul>
+            <li>文档已经迁到 <code>docs/</code>，这是正确动作。</li>
+            <li>但所有读取方、clone 方、历史兼容方是否完全一致，还需要再做一次系统清点。</li>
+          </ul>
+        </div>
+        <div>
+          <h3>2.4 verifier 还没完全产品化</h3>
+          <ul>
+            <li>现在 verifier 更像“强工程校验器”，还不是完全成熟的“发布门禁系统”。</li>
+            <li>尤其 warning vs block 的层级、失败文案归类、用户可操作提示，还能继续收口。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3. 当前版本下，V10 的真实完成度拆分</h2>
+      <table class="table">
+        <thead>
+          <tr><th>维度</th><th>评分</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>发布状态机</td><td>8.0 / 10</td><td>主状态已经开始围绕 draft / candidate / live / failed 转，但还残留旧字段/旧语义痕迹。</td></tr>
+          <tr><td>Candidate 发布链路</td><td>8.5 / 10</td><td>是当前最接近成型的一块，已经能看出 V10 的主骨架。</td></tr>
+          <tr><td>Verifier / 发布门禁</td><td>7.5 / 10</td><td>已有价值，但还没完全做到“清晰、分层、产品化”。</td></tr>
+          <tr><td>Repair / Retry 机制</td><td>7.0 / 10</td><td>已经有逻辑，但边界和 UX 还在修，说明尚未完全定稿。</td></tr>
+          <tr><td>Prompt / 生成质量控制</td><td>8.0 / 10</td><td>本轮加强后明显更像 V10 所需的“可验证生成”，但还需要更多 failure 类型约束。</td></tr>
+          <tr><td>文档与版本基线</td><td>7.0 / 10</td><td>方向对，但仍处于迁移后整理阶段，不算完全收口。</td></tr>
+          <tr><td>用户可见发布体验</td><td>7.8 / 10</td><td>已经比之前清楚很多，但仍能感受到 debug 工程感，离纯产品态还有距离。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>4. 现在的 V10 是否已经“可推进”</h2>
+      <p>我的判断：<strong>可以推进，而且应该继续沿现在这条线推进。</strong></p>
+      <div class="note">
+        不是回头重做，不是推翻；而是已经进入“主线正确，接下来做系统收口”的阶段。现在最不该做的是再换产品方向。
+      </div>
+      <div class="flow">
+        <span class="step">旧发布逻辑</span>
+        <span class="arrow">→</span>
+        <span class="step">V10 候选化</span>
+        <span class="arrow">→</span>
+        <span class="step">门禁与失败分类</span>
+        <span class="arrow">→</span>
+        <span class="step">修复与重试边界清晰化</span>
+        <span class="arrow">→</span>
+        <span class="step">文档/状态机彻底收口</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>5. 当前版本最大的三个风险</h2>
+      <ol>
+        <li><strong>表层流程已经新，底层历史结构还没完全清掉。</strong> 这会让你在后续迭代里持续遇到“看起来对了，但内部还在走旧逻辑”的问题。</li>
+        <li><strong>发布链太依赖工程理解。</strong> 对开发者友好，对普通产品用户还不够自然。</li>
+        <li><strong>文档迁移完成后，最怕读写路径不一致。</strong> 如果后续再改 baseline/clone/repair 相关逻辑，要特别小心。</li>
+      </ol>
+    </section>
+
+    <section class="card">
+      <h2>6. 最终评估结论</h2>
+      <p><span class="pill purple">结论</span></p>
+      <p><strong>V10 当前大约完成了 75%～80%。</strong></p>
+      <p>更准确地说：</p>
+      <ul>
+        <li>它已经不是 PPT 架构，也不是空壳 UI。</li>
+        <li>它已经有真实的 Candidate / Verify / Live 主干。</li>
+        <li>它最关键的价值已经开始落地：<strong>发布不再只是“点一下然后祈祷”</strong>。</li>
+        <li>但它还没到“完全收口、完全稳定、完全产品化”的最终态。</li>
+      </ul>
+      <div class="note">
+        如果把 V10 看成“新发布体系的最终版”，那现在已经到了 <strong>可用 Beta / 强内测版</strong>；还不是 Final，但绝对已经在正确轨道上了。
+      </div>
+    </section>
+
+    <div class="footer">
+      备注：本页为“现状评估”，不包含产品改动建议落地；目的是帮助你判断 V10 在当前版本的真实推进位置。
+    </div>
+  </div>
+</body>
+</html>

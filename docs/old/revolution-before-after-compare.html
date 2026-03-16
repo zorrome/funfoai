@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store 革命前后逻辑对照</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#fff; color:#111827; }
+    .wrap { max-width: 1280px; margin: 24px auto; padding: 0 16px 40px; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    h2 { font-size: 20px; margin: 0 0 10px; }
+    p, li { line-height: 1.7; color:#374151; }
+    .muted { color:#6b7280; font-size: 14px; }
+    .card { border: 1px solid #d1d5db; border-radius: 10px; padding: 16px; margin-bottom: 16px; background:#fff; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #d1d5db; padding: 12px; vertical-align: top; text-align: left; font-size: 14px; }
+    th { background:#f3f4f6; }
+    code { background:#f3f4f6; padding: 2px 6px; border-radius: 6px; }
+    ul { margin: 0; padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>funfo AI Store：革命前后逻辑对照</h1>
+      <div class="muted">目的：不做美化，只客观比较“当前逻辑”和“革命后目标逻辑”。</div>
+    </div>
+
+    <div class="card">
+      <h2>比较结论（一句话）</h2>
+      <p><strong>革命前：</strong>生成、部署、验证、修复、上线这几件事耦合在一起，系统状态靠多个字段拼接判断。</p>
+      <p><strong>革命后：</strong>开发、候选发布、正式上线分层处理，状态用统一模型表达，失败版本不再直接暴露成线上版本。</p>
+    </div>
+
+    <div class="card">
+      <h2>逐项对照</h2>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 18%;">维度</th>
+            <th style="width: 41%;">革命前（当前逻辑）</th>
+            <th style="width: 41%;">革命后（目标逻辑）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>系统目标</td>
+            <td>
+              <ul>
+                <li>同时追求：自动生成、自动修复、自动部署、自动验证</li>
+                <li>偏向“尽可能自动完成全部流程”</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>优先目标改为：稳定发布、结果单义、可回滚</li>
+                <li>偏向“先保证发布正确，再考虑智能修复”</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>开发态与长期态</td>
+            <td>
+              <ul>
+                <li>开发态与长期态逻辑部分混用</li>
+                <li><code>preview-manager</code> 与长期 runtime 存在历史耦合</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>开发态：仅用于 workspace / preview</li>
+                <li>长期态：仅用于 full Docker runtime</li>
+                <li>两者职责明确分离</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>长期化 app 的运行方式</td>
+            <td>
+              <ul>
+                <li>当前已接近 full Docker runtime</li>
+                <li>但发布、恢复、验证链路里仍有混合痕迹</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>长期化 app 统一视为独立 Docker 运行单元</li>
+                <li>前端与后端都由同一个 app 容器承接</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>发布流程</td>
+            <td>
+              <ul>
+                <li>生成代码</li>
+                <li>启动 Docker runtime</li>
+                <li>health_check</li>
+                <li>verifier</li>
+                <li>必要时 repair / re-repair</li>
+                <li>状态回写</li>
+              </ul>
+              <p>这些步骤强耦合在一个大流程中。</p>
+            </td>
+            <td>
+              <ul>
+                <li>生成代码</li>
+                <li>部署为 <code>candidate</code></li>
+                <li>health_check</li>
+                <li>verifier</li>
+                <li>通过后 promote 为 <code>live</code></li>
+                <li>失败则 rollback / stop candidate</li>
+              </ul>
+              <p>上线和验证会被明确分层。</p>
+            </td>
+          </tr>
+          <tr>
+            <td>运行状态与发布状态</td>
+            <td>
+              <ul>
+                <li>运行状态与发布状态没有彻底分离</li>
+                <li>可能出现：runtime 已可用，但 publish 记录为 failed</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>运行状态单独表达</li>
+                <li>发布状态单独表达</li>
+                <li>不会再把“候选运行中”误当成“正式上线”</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>状态模型</td>
+            <td>
+              <ul>
+                <li>要综合看：<code>status</code>、<code>publish_status</code>、<code>app_stage</code>、<code>runtime_mode</code></li>
+                <li>用户和 UI 都需要自己解释组合状态</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>统一收敛到：<code>draft</code> / <code>candidate</code> / <code>live</code> / <code>failed</code></li>
+                <li>先由派生状态过渡，后续再收敛到底层数据模型</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>Verifier 的角色</td>
+            <td>
+              <ul>
+                <li>Verifier 同时承担了“质量审查”和“发布阻断”职责</li>
+                <li>检查范围较广：artifact、contract、schema、auth smoke、行为等</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>Verifier 改为“最小阻塞守门员”</li>
+                <li>只阻止真正不能上线的问题</li>
+                <li>非关键问题降级为 warning</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>自动修复（repair）</td>
+            <td>
+              <ul>
+                <li>发布流程中允许较多修复与重试</li>
+                <li>容易拉长链路并增加状态复杂度</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>减少 repair 次数和权重</li>
+                <li>优先明确失败，而不是无限补丁</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>失败版本处理</td>
+            <td>
+              <ul>
+                <li>可能出现失败版本仍然保持容器在线</li>
+                <li>导致“能打开但显示失败”的体验</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>失败版本不再作为 live 对外暴露</li>
+                <li>失败后自动 rollback 或 stop candidate</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>用户看到的发布结果</td>
+            <td>
+              <ul>
+                <li>可能产生歧义</li>
+                <li>用户需要自己判断“到底算成功还是失败”</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>发布结果会更单义</li>
+                <li>成功就是 live，失败就是 failed，验证中就是 candidate</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>Admin / My Apps 展示</td>
+            <td>
+              <ul>
+                <li>展示字段较多，但语义分散</li>
+                <li>对“当前可用性”和“当前发布状态”解释不够清楚</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>前台与后台都围绕统一状态展示</li>
+                <li>用户更容易判断一个 app 现在处于哪种发布阶段</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td>系统复杂度</td>
+            <td>
+              <ul>
+                <li>多状态、多阶段、多隐式行为</li>
+                <li>一旦失败，很难迅速定位是哪一层问题</li>
+              </ul>
+            </td>
+            <td>
+              <ul>
+                <li>通过分层和收敛降低复杂度</li>
+                <li>让失败点更聚焦：生成 / health / verifier / promote / rollback</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>客观地说，这次革命不是在“增加什么能力”，而是在“删掉什么复杂性”</h2>
+      <ul>
+        <li>删除：运行状态与发布状态混在一起的解释方式</li>
+        <li>删除：失败版本直接暴露成线上版本的风险</li>
+        <li>删除：过重的 blocking verifier 角色</li>
+        <li>删除：开发态和长期态之间不清晰的耦合</li>
+        <li>删除：过多自动修复导致的不可预测性</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>当前已经开始发生的变化</h2>
+      <ul>
+        <li>已经开始引入统一派生状态 <code>release_state</code></li>
+        <li>长期化 app 已经在往 full Docker runtime 收敛</li>
+        <li>接下来真正的关键变化会是：<strong>candidate / live 分离</strong></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

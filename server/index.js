@@ -12,11 +12,38 @@ const db      = require('./db');
 
 const BABEL_PRESET_REACT = require.resolve('@babel/preset-react');
 const BABEL_PLUGIN_REACT_JSX = require.resolve('@babel/plugin-transform-react-jsx');
-const { startPreview, stopPreview, getPreviewPort, restoreFromDb } = require('./preview-manager');
-const { deployAppBackend, stopAppBackend, getApiPort, restoreBackendsFromDb, getContainerRuntime } = require('./app-backend-manager');
+const { startPreview, stopPreview, getPreviewPort, getPreviewSessionBySlug, restoreFromDb, proxyPreviewRequest } = require('./preview-manager');
+const { deployAppBackend, stopAppBackend, getAppBackendLogs, getApiPort, restoreBackendsFromDb, getContainerRuntime } = require('./app-backend-manager');
+const { buildWorkspaceHistory, buildModePrompt, runRepairPass } = require('./modes/workspace');
+const { createDocsModule } = require('./docs');
+const { createValidationModule } = require('./validation');
+const { createPublishModule } = require('./publish');
+const { createPublishPipeline } = require('./publish/pipeline');
+const { createVerifierModule } = require('./verifier');
+const { runBrowserSmoke } = require('./browser-smoke');
+const { BASE_SYSTEM_PROMPT, buildFailureContextRepairPrompt } = require('./prompts');
+const { ensureAppMemoryFiles, ensureUserContextDir, appendAppMemory, appendAppFailures, appendAppReleaseNotes, writeAppContextManifest } = require('./context-loader');
+const {
+  buildRepairSystemPrompt,
+} = require('./prompt-orchestrator');
+const {
+  callLlmOnce,
+  streamLlmText,
+  getLlmProviderSummary,
+  resolveSelectedModelKey,
+  getPublicModelCatalog,
+  getAdminAiConfig,
+  saveAnthropicProvider,
+  updatePlatformProviderModels,
+  disconnectPlatformProvider,
+  updatePlatformDefaultModel,
+  startOpenAICodexOAuthSession,
+  getOpenAICodexOAuthSession,
+  submitOpenAICodexOAuthManualInput,
+} = require('./llm-provider');
 
 const app   = express();
-const PORT  = 3100;
+const PORT  = Number(process.env.PORT || '3100');
 
 // ── Auto-detect LAN IP ────────────────────────────────────────────────
 // Used so preview iframes inject the correct API_BASE for LAN clients
@@ -33,16 +60,8 @@ function getLanIp() {
 }
 const SERVER_HOST = getLanIp();
 console.log(`🌐 Server LAN IP: ${SERVER_HOST}`);
-
-// 外网访问时预览/分享链接用公网 base（Nginx 反代 80/443 时设置，如 http://ec2-xxx.compute.amazonaws.com 或 https://your-domain.com）
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL ? String(process.env.PUBLIC_BASE_URL).replace(/\/$/, '') : '';
-function getPublicBase() {
-  return PUBLIC_BASE_URL || `http://${SERVER_HOST}:${PORT}`;
-}
-if (PUBLIC_BASE_URL) console.log(`🌐 Public base URL: ${PUBLIC_BASE_URL}`);
-
-const OPENCLAW_URL   = process.env.OPENCLAW_URL || 'http://127.0.0.1:18789/v1/chat/completions';
-const OPENCLAW_TOKEN = process.env.OPENCLAW_TOKEN || 'ad5eafdbdf9e6f965f8d7b976f43460fca15ae9da151aa34';
+const llmProviderSummary = getLlmProviderSummary();
+console.log(`🤖 App generation provider: ${llmProviderSummary.configured ? `${llmProviderSummary.provider}:${llmProviderSummary.model || 'unset-model'}` : 'unconfigured'}`);
 const REQ_CARD_PREFIX = '__FUNFO_REQ__';
 
 // Auto-fix guardrails (prevent infinite repair loops)
@@ -50,147 +69,21 @@ const autoFixInFlight = new Set(); // appId
 const autoFixCooldownUntil = new Map(); // appId -> epoch ms
 
 // ── System Prompt ─────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are "funfo AI" — a full-stack app generator for Japanese restaurant management.
-
-When a user describes an app, generate a complete solution.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FRONTEND (REQUIRED — always include)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Wrap in: \`\`\`jsx
-
-⚠️ CRITICAL RULES:
-• NO import statements
-• NO TypeScript syntax (no : Type, no interface, no as Type)
-• Write: function App() { ... }   (NOT "export default function")
-• Use emoji instead of icons (📊 📅 👥 💰 ✅ ❌ etc.)
-• All text in Japanese
-• Use Tailwind CSS classes for ALL styling — no inline style={{ }} attributes
-• Example: className="bg-white rounded-xl shadow p-6 border border-slate-200"
-• Use API_BASE variable (injected) for backend calls: fetch(API_BASE + '/api/...')
-• Avoid template literals/backticks in generated code (especially URLs); use string concatenation with + to reduce parser errors
-
-Available globals (already injected):
-  useState, useEffect, useMemo, useCallback, useRef, useReducer
-  BarChart, Bar, LineChart, Line, AreaChart, Area,
-  PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer, RadarChart, Radar,
-  PolarGrid, PolarAngleAxis, ComposedChart
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BACKEND (include when app needs data persistence or API)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Wrap route code in: \`\`\`javascript server
-
-Rules:
-• Write only Express route handlers (app.get/post/put/delete)
-• db is already defined as better-sqlite3 instance
-• app and cors are already set up
-• No require() statements needed
-• Use db.prepare(...).all/get/run for SQLite
-
-Example:
-\`\`\`javascript server
-app.get('/api/items', (req, res) => {
-  const rows = db.prepare('SELECT * FROM items').all();
-  res.json(rows);
-});
-app.post('/api/items', (req, res) => {
-  const { name, price } = req.body;
-  const r = db.prepare('INSERT INTO items (name, price) VALUES (?, ?)').run(name, price);
-  res.json({ id: r.lastInsertRowid });
-});
-\`\`\`
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DATABASE SCHEMA (include when backend is included)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Wrap in: \`\`\`sql
-
-Rules:
-• Write CREATE TABLE IF NOT EXISTS statements only
-• Use INTEGER PRIMARY KEY AUTOINCREMENT for IDs
-• Include sensible default values
-
-Example:
-\`\`\`sql
-CREATE TABLE IF NOT EXISTS items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  price INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-\`\`\`
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DESIGN (Tailwind CSS — all classes available via Play CDN)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Visual quality baseline: refined SaaS feel, avoid toy-like oversized UI
-• Typography scale (strict): title text-2xl max, section title text-sm/ font-semibold, body text-sm, helper text-xs
-• Controls density (strict): button height h-9 (primary) / h-8 (secondary), input h-9, avoid giant paddings
-• Card-based layout: bg-white rounded-xl shadow-sm border border-slate-200 p-4 (default)
-• Header: clean, usually white or very light surface; avoid heavy full-width color bars unless explicitly requested
-• Primary button: use balanced color + subtle hover, keep visual weight moderate
-• Input: border border-slate-300 rounded-lg px-3 py-2 w-full focus:ring-2 outline-none
-• Table: compact and readable; th text-xs font-semibold, td text-sm, row padding py-2~2.5
-• Status badges: inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium
-• White/light page background: min-h-screen bg-slate-50
-• Include loading states (animate-spin, animate-pulse) and empty states
-• For backend apps: show actual data from API, with add/edit/delete buttons
-
-QUALITY UPGRADE (strict)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Before coding, internally define: target users, core workflow, screens, entities, and API contract.
-• Output must be feature-complete enough for real trial use (not toy demo).
-• Avoid repetitive same-looking UI; reflect requested design paradigm in layout, spacing, component composition, and visual rhythm.
-• Do NOT default to indigo/purple/fuchsia palette unless explicitly requested by user/pattern.
-• Every frontend /api call must have backend route implementation.
-
-After all code blocks, write 2-3 Japanese sentences explaining what was built.`;
+const SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;
 
 app.use(cors());
 app.use(express.json());
-
-// LLM 返回的 JSON 常有尾逗号等，修复后解析；失败返回 null
-function parseJsonRelaxed(jsonText) {
-  if (!jsonText || typeof jsonText !== 'string') return null;
-  let s = jsonText.trim();
-  const m = s.match(/\{[\s\S]*\}/);
-  if (m) s = m[0];
-  s = s.replace(/,(\s*[}\]])/g, '$1');
+app.get('/api/__build_tag', (_req, res) => res.json({ tag: 'p0-state-machine-20260312-1918' }));
+app.get('/api/ai/models', async (_req, res) => {
   try {
-    return JSON.parse(s);
-  } catch {
-    return null;
+    const catalog = await getPublicModelCatalog();
+    res.json({ ok: true, models: catalog.models, defaultModelKey: catalog.defaultModelKey });
+  } catch (e) {
+    res.status(500).json({ error: `ai model catalog failed: ${String(e?.message || e)}` });
   }
-}
+});
 
-const DEFAULT_PLAN_STEPS = [
-  'データモデルとエンティティの定義',
-  'API スコープとエンドポイント設計',
-  '画面構成とナビゲーション設計',
-  '権限・ロールの整理',
-  'エッジケースとバリデーション',
-  'ロールアウトと段階リリース方針',
-];
-const DEFAULT_PLAN_QUESTIONNAIRE = [
-  { id: 'layout', title: 'レイアウト', options: ['カード型', 'テーブル中心', 'ダッシュボード'] },
-  { id: 'scope', title: '初期スコープ', options: ['最小限', '標準', 'フル'] },
-];
-
-const DEFAULT_DESIGN_CONCEPT = 'シンプルで実用的な業務向けUI。カード型レイアウト・控えめな配色・明確な階層を基本とする。';
-const DEFAULT_DESIGN_STYLE_GUIDE = [
-  '主色はスレート系、アクセントは控えめに',
-  '見出し text-xl、本文 text-sm、補足 text-xs',
-  'カードは rounded-xl shadow-sm border',
-  'ボタン h-9、入力 h-9 で密度を統一',
-  '空状態・ローディングを必ず用意',
-];
-const DEFAULT_DESIGN_UI_CHECKLIST = [
-  'カード/ボタン/テーブルの一貫したスタイル',
-  'フォームのバリデーションとエラー表示',
-  'レスポンシブを考慮したレイアウト',
-];
+// ── Helpers ───────────────────────────────────────────────────────────
 
 function randomSlug(len = 8) {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -215,15 +108,219 @@ function ensurePreviewSlug(appId) {
   return null;
 }
 
+function ensureWorkspaceSlug(appId) {
+  const row = db.prepare('SELECT workspace_slug FROM apps WHERE id = ?').get(appId);
+  if (!row) return null;
+  if (row.workspace_slug) return row.workspace_slug;
+
+  for (let i = 0; i < 20; i++) {
+    const slug = `w_${randomSlug(12)}`;
+    const exists = db.prepare('SELECT id FROM apps WHERE workspace_slug = ?').get(slug);
+    if (!exists) {
+      db.prepare('UPDATE apps SET workspace_slug = ? WHERE id = ?').run(slug, appId);
+      return slug;
+    }
+  }
+  return null;
+}
+
+const WORKSPACE_PREVIEW_SUFFIX = '_preview';
+
+function buildWorkspacePublicPath(workspaceSlug) {
+  const slug = String(workspaceSlug || '').trim();
+  return slug ? `/w/${slug}` : null;
+}
+
+function buildWorkspacePreviewPath(workspaceSlug) {
+  const slug = String(workspaceSlug || '').trim();
+  return slug ? `/w/${slug}${WORKSPACE_PREVIEW_SUFFIX}` : null;
+}
+
+function buildWorkspacePublicUrl(workspaceSlug) {
+  const path = buildWorkspacePublicPath(workspaceSlug);
+  return path ? `http://${SERVER_HOST}:${PORT}${path}` : null;
+}
+
+function buildWorkspacePreviewUrl(workspaceSlug) {
+  const path = buildWorkspacePreviewPath(workspaceSlug);
+  return path ? `http://${SERVER_HOST}:${PORT}${path}` : null;
+}
+
+function parseWorkspaceRouteToken(rawToken = '') {
+  const token = String(rawToken || '').trim();
+  const isPreview = token.endsWith(WORKSPACE_PREVIEW_SUFFIX);
+  const workspaceSlug = isPreview ? token.slice(0, -WORKSPACE_PREVIEW_SUFFIX.length) : token;
+  return { token, workspaceSlug, isPreview };
+}
+
+function deriveReleaseState(appRow, publishJob = null) {
+  if (!appRow) return 'draft';
+  if (appRow.release_state) return appRow.release_state;
+  const publishStatus = appRow.publish_status || publishJob?.status || 'idle';
+  const stage = appRow.app_stage || '';
+  if (publishStatus === 'publishing') return 'candidate';
+  if (publishStatus === 'failed' || stage === 'release_blocked' || stage === 'repair_needed') return 'failed';
+  if ((appRow.runtime_mode === 'server' && (appRow.release_state || 'draft') !== 'draft') || stage === 'published_live') return 'live';
+  return 'draft';
+}
+
 function withPreviewLink(appRow) {
   if (!appRow) return appRow;
   const slug = appRow.preview_slug || ensurePreviewSlug(appRow.id);
+  const workspaceSlug = appRow.workspace_slug || ensureWorkspaceSlug(appRow.id);
   return {
     ...appRow,
+    release_state: appRow.release_state || deriveReleaseState(appRow),
     preview_slug: slug,
-    preview_path: slug ? `/app/${slug}/` : null,
-    preview_url: slug ? `${getPublicBase()}/app/${slug}/` : null,
+    workspace_slug: workspaceSlug,
+    preview_path: buildWorkspacePreviewPath(workspaceSlug),
+    preview_url: buildWorkspacePreviewUrl(workspaceSlug),
+    public_path: buildWorkspacePublicPath(workspaceSlug),
+    public_url: buildWorkspacePublicUrl(workspaceSlug),
+    legacy_preview_path: slug ? `/app/${slug}` : null,
   };
+}
+
+function getEffectiveReleaseAppId(appRow) {
+  if (!appRow) return null;
+  if (appRow.app_role === 'draft' && appRow.release_app_id) return Number(appRow.release_app_id);
+  return Number(appRow.id);
+}
+
+function isWorkspaceDraft(appRow) {
+  return !!appRow && appRow.app_role === 'draft';
+}
+
+function isReleaseEditingLocked(appRow) {
+  if (!appRow) return false;
+  if (isWorkspaceDraft(appRow)) return false;
+  return (appRow.release_state || deriveReleaseState(appRow)) === 'live' || appRow.runtime_mode === 'server';
+}
+
+function findExistingWorkspaceDraftForRelease(releaseAppId, ownerUserId) {
+  if (!releaseAppId || !ownerUserId) return null;
+  return db.prepare(`
+    SELECT * FROM apps
+    WHERE owner_user_id = ? AND app_role = 'draft' AND release_app_id = ?
+    ORDER BY datetime(updated_at) DESC, id DESC
+    LIMIT 1
+  `).get(ownerUserId, releaseAppId);
+}
+
+async function cloneReleaseToWorkspaceDraft(sourceReleaseId, ownerUserId) {
+  const source = db.prepare('SELECT * FROM apps WHERE id = ?').get(sourceReleaseId);
+  if (!source) throw new Error('Live App が見つかりません');
+  if ((source.release_state || deriveReleaseState(source)) !== 'live') throw new Error('Live release のみワークスペース化できます');
+
+  let newAppId = null;
+  let lastVersion = 1;
+  const tx = db.transaction(() => {
+    const r = db.prepare(
+      "INSERT INTO apps (owner_user_id, name, icon, description, status, app_role, release_app_id, current_version, color, runtime_mode, ai_model_key) VALUES (?, ?, ?, ?, 'draft', 'draft', ?, ?, ?, 'local', ?)"
+    ).run(ownerUserId, `${source.name}（ワークスペース）`, source.icon, source.description || '', source.id, Number(source.current_version || 1), source.color || null, source.ai_model_key || null);
+
+    newAppId = Number(r.lastInsertRowid);
+    const versionsRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number ASC').all(source.id);
+    const versions = hydrateVersionRows(source.id, versionsRaw);
+    for (const v of versions) {
+      db.prepare(
+        'INSERT INTO app_versions (app_id, version_number, label, code, server_code, sql_code) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(newAppId, v.version_number, v.label, '', '', '');
+    }
+    const mv = db.prepare('SELECT MAX(version_number) as mv FROM app_versions WHERE app_id = ?').get(newAppId).mv || 1;
+    lastVersion = Number(mv || 1);
+    db.prepare("UPDATE apps SET current_version = ?, updated_at = datetime('now') WHERE id = ?").run(lastVersion, newAppId);
+  });
+  tx();
+
+  cloneAppAllFiles(source.id, newAppId);
+  const sourceVersionsRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number ASC').all(source.id);
+  const sourceVersions = hydrateVersionRows(source.id, sourceVersionsRaw);
+  for (const v of sourceVersions) {
+    const srcFiles = readVersionFiles(source.id, v.version_number);
+    const codeToUse = v.code || srcFiles.code || '';
+    const serverToUse = v.server_code || srcFiles.server_code || '';
+    const sqlToUse = v.sql_code || srcFiles.sql_code || '';
+    writeVersionFiles(newAppId, v.version_number, codeToUse, serverToUse, sqlToUse);
+  }
+
+  validateClonedAppFiles(newAppId, lastVersion);
+
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(newAppId);
+  const latest = hydrateVersionRow(newAppId, latestRaw);
+
+  if (latest) {
+    appendAppSpecSnapshot(newAppId, `${source.name}（コピー）`, latest.version_number || lastVersion, latest.code || '', latest.server_code || '', latest.sql_code || '');
+    writeApiAndDbDocs(newAppId, `${source.name}（コピー）`, latest.version_number || lastVersion, latest.code || '', latest.server_code || '', latest.sql_code || '');
+  }
+
+  let apiPort = null;
+  if (latest?.server_code) {
+    apiPort = await deployAppBackend(newAppId, latest.server_code, latest.sql_code || '', ensurePreviewSlug(newAppId), { frontendCode: latest.code || '', dbMode: 'dev' });
+    if (apiPort) db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(apiPort, newAppId);
+  }
+  const previewSlug = ensurePreviewSlug(newAppId);
+  if (latest?.code) startPreview(newAppId, latest.code, '', previewSlug);
+
+  ensureAppFilesMaterializedFromDb(newAppId);
+  db.prepare("UPDATE apps SET owner_user_id = ?, guest_key = NULL, updated_at = datetime('now') WHERE id = ?").run(ownerUserId, newAppId);
+  return db.prepare('SELECT * FROM apps WHERE id = ?').get(newAppId);
+}
+
+async function ensureWorkspaceDraftFromRelease(sourceReleaseId, ownerUserId) {
+  const existing = findExistingWorkspaceDraftForRelease(sourceReleaseId, ownerUserId);
+  if (existing) {
+    ensureAppFilesMaterializedFromDb(existing.id);
+    touchAppAccess(existing.id);
+    return { app: existing, created: false };
+  }
+  const createdApp = await cloneReleaseToWorkspaceDraft(sourceReleaseId, ownerUserId);
+  touchAppAccess(createdApp.id);
+  return { app: createdApp, created: true };
+}
+
+function buildWorkspaceDraftRedirectPayload(sourceAppRow, draftAppRow, created = false) {
+  const releaseAppId = getEffectiveReleaseAppId(sourceAppRow);
+  const withLink = withPreviewLink(draftAppRow);
+  return {
+    error: 'Live release 不能直接编辑。请打开对应的 Workspace 草稿。',
+    code: 'RELEASE_EDIT_REDIRECT',
+    needs_workspace_draft: true,
+    created_workspace_draft: !!created,
+    release_app_id: releaseAppId,
+    workspace_draft: {
+      ...withLink,
+      preview_port: getPreviewPort(draftAppRow.id),
+      api_port: getApiPort(draftAppRow.id) ?? draftAppRow.api_port,
+    },
+  };
+}
+
+function createReleaseBackupSnapshot(releaseAppId, sourceDraftAppId = null) {
+  const releaseRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(releaseAppId);
+  if (!releaseRow) throw new Error('release app not found');
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(releaseAppId);
+  const latest = hydrateVersionRow(releaseAppId, latestRaw);
+  const nextBackupVersion = Number((db.prepare('SELECT MAX(backup_version_number) as mv FROM app_release_backups WHERE release_app_id = ?').get(releaseAppId)?.mv || 0) + 1);
+  db.prepare(`
+    INSERT INTO app_release_backups (
+      release_app_id, source_draft_app_id, backup_version_number, release_version_number,
+      name, icon, description, color, code, server_code, sql_code
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    releaseAppId,
+    sourceDraftAppId || null,
+    nextBackupVersion,
+    latest?.version_number || releaseRow.current_version || 1,
+    releaseRow.name || '新規アプリ',
+    releaseRow.icon || '✨',
+    releaseRow.description || '',
+    releaseRow.color || null,
+    latest?.code || '',
+    latest?.server_code || '',
+    latest?.sql_code || '',
+  );
+  return nextBackupVersion;
 }
 
 function touchAppAccess(appId) {
@@ -231,51 +328,299 @@ function touchAppAccess(appId) {
   db.prepare("UPDATE apps SET last_access_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(appId);
 }
 
+function buildVisitorKey(req) {
+  const user = getAuthUser(req);
+  if (user?.id) return `user:${user.id}`;
+  const guestKey = getGuestKey(req);
+  if (guestKey) return `guest:${guestKey}`;
+  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  const ua = String(req.headers['user-agent'] || 'unknown');
+  const raw = `${ip}|${ua}`;
+  return `anon:${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16)}`;
+}
+
+function recordAppVisit(appId, req, source = 'preview') {
+  if (!appId || !req) return;
+  const visitorKey = buildVisitorKey(req);
+  const pathPart = String(req.originalUrl || req.url || '/').slice(0, 400);
+  db.prepare('INSERT INTO app_access_events (app_id, visitor_key, source, path) VALUES (?, ?, ?, ?)').run(appId, visitorKey, source, pathPart || '/');
+}
+
+function requireAppOwner(appId, userId) {
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return { error: 'Not found', status: 404, appRow: null };
+  if (appRow.owner_user_id !== userId) return { error: '编辑权限不存在', status: 403, appRow };
+  return { appRow, error: null, status: 200 };
+}
+
+function quoteSqliteIdentifier(name = '') {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+function getAppDbPath(appId) {
+  return path.join(ensureAppRuntimeDir(appId), 'data_prod.sqlite');
+}
+
+function getAppSchemaPath(appId) {
+  return path.join(ensureAppRuntimeDir(appId), 'schema.sql');
+}
+
+function listAppDatabaseTables(appId) {
+  const dbPath = getAppDbPath(appId);
+  if (!fs.existsSync(dbPath)) return { dbPath, exists: false, tables: [] };
+  const sqlite = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    const tables = rows.map((row) => {
+      const tableName = String(row.name || '');
+      const cols = sqlite.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(tableName)})`).all().map(c => c.name);
+      let rowCount = null;
+      try {
+        rowCount = Number(sqlite.prepare(`SELECT COUNT(*) as c FROM ${quoteSqliteIdentifier(tableName)}`).get().c || 0);
+      } catch {}
+      return { name: tableName, rowCount, columns: cols };
+    });
+    return { dbPath, exists: true, tables };
+  } finally {
+    try { sqlite.close(); } catch {}
+  }
+}
+
+function buildAnalyticsBuckets(range = 'day') {
+  const buckets = [];
+  const now = new Date();
+  const count = range === 'month' ? 12 : range === 'week' ? 12 : 14;
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(now);
+    if (range === 'month') d.setUTCMonth(d.getUTCMonth() - i, 1);
+    else if (range === 'week') d.setUTCDate(d.getUTCDate() - (i * 7));
+    else d.setUTCDate(d.getUTCDate() - i);
+    const year = d.getUTCFullYear();
+    const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    let bucket = `${year}-${month}-${day}`;
+    let label = `${month}/${day}`;
+    if (range === 'week') {
+      const start = new Date(d);
+      start.setUTCDate(d.getUTCDate() - d.getUTCDay());
+      const y = start.getUTCFullYear();
+      const m = String(start.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(start.getUTCDate()).padStart(2, '0');
+      bucket = `${y}-W${m}${dd}`;
+      label = `${m}/${dd}`;
+    }
+    if (range === 'month') {
+      bucket = `${year}-${month}`;
+      label = `${year}/${month}`;
+    }
+    buckets.push({ bucket, label });
+  }
+  return buckets;
+}
+
+function getAppAnalytics(appId, range = 'day') {
+  const rows = db.prepare('SELECT visitor_key, created_at FROM app_access_events WHERE app_id = ? ORDER BY created_at ASC').all(appId);
+  const bucketMap = new Map(buildAnalyticsBuckets(range).map(item => [item.bucket, { ...item, visits: 0, activeUsersSet: new Set() }]));
+  for (const row of rows) {
+    const dt = new Date(String(row.created_at).replace(' ', 'T') + 'Z');
+    if (Number.isNaN(dt.getTime())) continue;
+    const year = dt.getUTCFullYear();
+    const month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(dt.getUTCDate()).padStart(2, '0');
+    let bucket = `${year}-${month}-${day}`;
+    if (range === 'week') {
+      const start = new Date(dt);
+      start.setUTCDate(dt.getUTCDate() - dt.getUTCDay());
+      bucket = `${start.getUTCFullYear()}-W${String(start.getUTCMonth() + 1).padStart(2, '0')}${String(start.getUTCDate()).padStart(2, '0')}`;
+    }
+    if (range === 'month') bucket = `${year}-${month}`;
+    const item = bucketMap.get(bucket);
+    if (!item) continue;
+    item.visits += 1;
+    item.activeUsersSet.add(String(row.visitor_key || 'unknown'));
+  }
+  const points = [...bucketMap.values()].map(item => ({
+    bucket: item.bucket,
+    label: item.label,
+    visits: item.visits,
+    activeUsers: item.activeUsersSet.size,
+  }));
+  const summary = points.reduce((acc, item) => {
+    acc.visits += item.visits;
+    acc.activeUsers += item.activeUsers;
+    return acc;
+  }, { visits: 0, activeUsers: 0 });
+  const appRow = db.prepare('SELECT last_access_at FROM apps WHERE id = ?').get(appId);
+  return { range, summary: { ...summary, lastVisitedAt: appRow?.last_access_at || null }, points };
+}
+
 async function wakeAppRuntime(appId) {
   const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
   if (!appRow) return { previewPort: null, apiPort: null };
 
-  const latest = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const latest = hydrateVersionRow(appId, latestRaw);
   const previewSlug = ensurePreviewSlug(appId);
 
   const contract = injectMissingApiStubs(latest?.code || '', latest?.server_code || '');
-  const serverToUse = contract.code;
+  const normalizedServer = normalizeBackendSqlStrings(contract.code || '');
+  const serverToUse = normalizedServer.code || contract.code;
 
   let runtime = getContainerRuntime(appId);
   const labelOk = !!runtime && runtime.labels?.['funfo.app_id'] === String(appId) && runtime.labels?.['funfo.slug'] === String(previewSlug);
   if ((!runtime || !runtime.running || !labelOk) && serverToUse && serverToUse.trim()) {
-    await deployAppBackend(appId, serverToUse, latest?.sql_code || '', previewSlug);
+    await deployAppBackend(appId, serverToUse, latest?.sql_code || '', previewSlug, { frontendCode: latest?.code || '', dbMode: appRow?.runtime_mode === 'server' ? 'prod' : 'dev' });
     runtime = getContainerRuntime(appId);
     if (latest?.id && (!latest.server_code || !latest.server_code.trim())) {
       db.prepare('UPDATE app_versions SET server_code = ? WHERE id = ?').run(serverToUse, latest.id);
     }
   }
 
-  const apiBaseUrl = previewSlug ? `/app/${previewSlug}` : '';
-  const previewPort = startPreview(appId, latest?.code || '', apiBaseUrl, previewSlug);
+  let previewPort = null;
+  if (appRow.runtime_mode !== 'server') {
+    previewPort = startPreview(appId, latest?.code || '', '', previewSlug);
+  }
   touchAppAccess(appId);
   return { previewPort, apiPort: null };
 }
 
-async function waitRuntimeReady(runtime, retries = 8, delayMs = 250) {
-  if (!runtime?.running || !runtime?.ip) return false;
-  for (let i = 0; i < retries; i++) {
-    try {
-      const r = await fetch(`http://${runtime.ip}:3001/health`);
-      if (r.ok) return true;
-    } catch {}
-    await new Promise(resolve => setTimeout(resolve, delayMs));
+async function resolveVerifierBrowserSmokeUrl(appId, _latest = null, options = {}) {
+  const appRow = db.prepare('SELECT runtime_mode FROM apps WHERE id = ?').get(appId);
+  if (appRow?.runtime_mode === 'server' && options?.runtime) {
+    const runtimeUrl = getRuntimeBaseUrl(options.runtime);
+    if (runtimeUrl) return `${runtimeUrl}/`;
   }
-  return false;
+  const workspaceSlug = ensureWorkspaceSlug(appId);
+  if (!workspaceSlug) throw new Error('workspace slug missing');
+  await wakeAppRuntime(appId);
+  const previewPath = buildWorkspacePreviewPath(workspaceSlug);
+  if (!previewPath) throw new Error('preview path missing');
+  return `http://127.0.0.1:${PORT}${previewPath}/`;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const timeoutMs = Math.max(1, Number(options.timeoutMs || 1500));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function resolveRuntimeTarget(target) {
+  if (!target) return { appId: null, runtime: null };
+  if (typeof target === 'number' || /^\d+$/.test(String(target || ''))) {
+    return { appId: Number(target), runtime: null };
+  }
+  if (target.runtime) {
+    return {
+      appId: Number(target.appId || target.runtime?.appId || 0) || null,
+      runtime: target.runtime,
+    };
+  }
+  return {
+    appId: Number(target.appId || target.app_id || 0) || null,
+    runtime: target,
+  };
+}
+
+function getRuntimeBaseUrl(runtime) {
+  if (!runtime?.running) return '';
+  if (runtime.hostPort) return `http://127.0.0.1:${runtime.hostPort}`;
+  if (runtime.ip) return `http://${runtime.ip}:3001`;
+  return '';
+}
+
+async function waitRuntimeReadyDetailed(target, retries = 8, delayMs = 250, options = {}) {
+  const { appId, runtime: initialRuntime } = resolveRuntimeTarget(target);
+  const timeoutMs = Math.max(200, Number(options.timeoutMs || 1500));
+  let runtime = initialRuntime || null;
+  let lastError = null;
+  let lastStatus = null;
+  let lastHealth = null;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    if ((!runtime?.running || !runtime?.ip) && appId) {
+      runtime = getContainerRuntime(appId);
+    }
+
+    if (runtime?.running && (runtime?.ip || runtime?.hostPort)) {
+      try {
+        const runtimeBaseUrl = getRuntimeBaseUrl(runtime);
+        if (!runtimeBaseUrl) {
+          lastError = 'runtime endpoint unavailable';
+          if (attempt < retries) {
+            await sleep(delayMs);
+            if (appId) runtime = getContainerRuntime(appId) || runtime;
+          }
+          continue;
+        }
+        const response = await fetchWithTimeout(`${runtimeBaseUrl}/health`, { timeoutMs });
+        lastStatus = response.status;
+        if (response.ok) {
+          try {
+            lastHealth = await response.json();
+          } catch {
+            lastHealth = null;
+          }
+          return {
+            ok: true,
+            attempts: attempt,
+            runtime,
+            status: response.status,
+            health: lastHealth,
+            error: null,
+          };
+        }
+        lastError = `health responded ${response.status}`;
+      } catch (error) {
+        lastError = String(error?.name === 'AbortError' ? `health timeout after ${timeoutMs}ms` : (error?.message || error));
+      }
+    } else {
+      const state = runtime?.running ? 'runtime ip unavailable' : 'runtime not running';
+      lastError = appId ? `${state}; waiting for container inspect` : state;
+    }
+
+    if (attempt < retries) {
+      await sleep(delayMs);
+      if (appId) runtime = getContainerRuntime(appId) || runtime;
+    }
+  }
+
+  if ((!runtime?.running || !runtime?.ip) && appId) {
+    runtime = getContainerRuntime(appId) || runtime;
+  }
+
+  return {
+    ok: false,
+    attempts: retries,
+    runtime: runtime || null,
+    status: lastStatus,
+    health: lastHealth,
+    error: lastError || 'health endpoint not ready',
+  };
+}
+
+async function waitRuntimeReady(target, retries = 8, delayMs = 250, options = {}) {
+  const result = await waitRuntimeReadyDetailed(target, retries, delayMs, options);
+  return !!result.ok;
 }
 
 function proxyToAppContainer(req, res, runtime, pathPart) {
-  if (!runtime?.running || !runtime?.ip) {
+  if (!runtime?.running || (!runtime?.ip && !runtime?.hostPort)) {
     res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ error: 'App container unavailable' }));
   }
 
-  const headers = { ...req.headers, host: `${runtime.ip}:3001` };
+  const targetHost = runtime.hostPort ? '127.0.0.1' : runtime.ip;
+  const targetPort = runtime.hostPort || 3001;
+  const headers = { ...req.headers, host: `${targetHost}:${targetPort}` };
   const method = String(req.method || 'GET').toUpperCase();
   const mayHaveBody = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
@@ -289,8 +634,8 @@ function proxyToAppContainer(req, res, runtime, pathPart) {
   }
 
   const options = {
-    hostname: runtime.ip,
-    port: 3001,
+    hostname: targetHost,
+    port: targetPort,
     path: pathPart,
     method,
     headers,
@@ -359,31 +704,85 @@ function normalizeMessageForModel(content) {
 }
 
 function parseAIResponse(content) {
-  // Frontend JSX
-  const jsxMatch = content.match(/```jsx\n([\s\S]*?)```/);
+  const text = String(content || '');
+  const forbiddenPathHints = [
+    'projects/apps/',
+    '/Users/Joe/.openclaw/workspace/projects/apps/',
+    'standalone repo',
+    'external project folder',
+  ];
+  const hasForbiddenPathHint = forbiddenPathHints.some((hint) => text.includes(hint));
+
+  // Frontend JSX: collect all jsx/tsx blocks and pick the best full-app candidate.
+  const jsxBlocks = [];
+  const jsxRe = /```(?:jsx|tsx)\n([\s\S]*?)```/g;
+  let m;
+  while ((m = jsxRe.exec(text)) !== null) {
+    const block = String(m[1] || '').trim();
+    if (block) jsxBlocks.push(block);
+  }
+
+  const scoreJsx = (code) => {
+    let s = 0;
+    if (/function\s+App\s*\(/.test(code) || /const\s+App\s*=/.test(code)) s += 4;
+    if (/export\s+default\s+App/.test(code)) s += 3;
+    if (/useState\s*\(/.test(code) || /useEffect\s*\(/.test(code)) s += 2;
+    if (/return\s*\(/.test(code)) s += 2;
+    s += Math.min(4, Math.floor(code.length / 4000));
+    return s;
+  };
+
+  let jsx = null;
+  if (jsxBlocks.length) {
+    jsx = [...jsxBlocks].sort((a, b) => scoreJsx(b) - scoreJsx(a) || b.length - a.length)[0];
+    // If response only gave tiny snippet/tutorial fragment, do not overwrite app.
+    if (jsx.length < 2000 && !/function\s+App\s*\(/.test(jsx)) jsx = null;
+  }
+
   // Backend server code
-  const serverMatch = content.match(/```javascript server\n([\s\S]*?)```/) ||
-                      content.match(/```js server\n([\s\S]*?)```/);
+  const serverMatch = text.match(/```javascript server\n([\s\S]*?)```/) ||
+                      text.match(/```js server\n([\s\S]*?)```/);
   // SQL schema
-  const sqlMatch = content.match(/```sql\n([\s\S]*?)```/);
+  const sqlMatch = text.match(/```sql\n([\s\S]*?)```/);
+
+  if (hasForbiddenPathHint) {
+    console.warn('⚠️ AI response referenced forbidden external app path; keeping funfo-internal app semantics');
+  }
 
   return {
-    jsx:    jsxMatch?.[1]?.trim()    ?? null,
+    jsx:    jsx?.trim() ?? null,
     server: serverMatch?.[1]?.trim() ?? null,
-    sql:    sqlMatch?.[1]?.trim()    ?? null,
+    sql:    sqlMatch?.[1]?.trim() ?? null,
+    hasForbiddenPathHint,
   };
 }
 
 function extractFrontendApiContracts(frontendCode = '') {
   const map = new Map();
   const src = String(frontendCode || '');
+  const normalizePath = (rawPath = '') => {
+    let path = String(rawPath || '').trim();
+    if (!path) return '';
+    const apiIdx = path.indexOf('/api/');
+    if (apiIdx < 0) return '';
+    path = path.slice(apiIdx).split('?')[0].trim();
+    path = path.replace(/["'`]/g, '');
+    path = path.replace(/\$\{[^}]+\}/g, ':id');
+    path = path.replace(/\s*\+\s*[^,+)]+/g, ':id');
+    path = path.replace(/:id:id+/g, ':id');
+    path = path.replace(/\/+:id/g, '/:id');
+    path = path.replace(/\/+/g, '/');
+    if (path.length > 1) path = path.replace(/\/+$/g, '');
+    return path.trim();
+  };
   const add = (method, path) => {
-    if (!path || !path.startsWith('/api/')) return;
-    const clean = path.split('?')[0].split('${')[0].replace(/\/$/, '') || path;
-    map.set(`${String(method).toUpperCase()} ${clean}`, { method: String(method).toUpperCase(), path: clean });
+    const clean = normalizePath(path);
+    if (!clean || !clean.startsWith('/api/')) return;
+    const m = String(method).toUpperCase();
+    map.set(`${m} ${clean}`, { method: m, path: clean, expect: m === 'GET' ? 'array' : 'object' });
   };
 
-  const re1 = /fetch\(\s*(?:API_BASE\s*\+\s*)?["'`]([^"'`]+)["'`]\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/g;
+  const re1 = /fetch\(\s*(?:[A-Z_][A-Z0-9_]*\s*\+\s*)?["'`]([^"'`]+)["'`]\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/g;
   let m;
   while ((m = re1.exec(src)) !== null) {
     const path = m[1] || '';
@@ -392,8 +791,43 @@ function extractFrontendApiContracts(frontendCode = '') {
     add(mm ? mm[1] : 'GET', path);
   }
 
+  const reConcatFetch = /fetch\(\s*[^,)]*?["'`]([^"'`]*\/api\/[^"'`]*)["'`][^,)]*(?:,\s*\{([\s\S]*?)\})?\s*\)/g;
+  while ((m = reConcatFetch.exec(src)) !== null) {
+    const path = m[1] || '';
+    const opts = m[2] || '';
+    const mm = opts.match(/method\s*:\s*["'`](GET|POST|PUT|PATCH|DELETE)["'`]/i);
+    add(mm ? mm[1] : 'GET', path);
+  }
+
+  const reTemplateFetch = /fetch\(\s*`([^`]+)`\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/g;
+  while ((m = reTemplateFetch.exec(src)) !== null) {
+    const path = m[1] || '';
+    const opts = m[2] || '';
+    const mm = opts.match(/method\s*:\s*["'`](GET|POST|PUT|PATCH|DELETE)["'`]/i);
+    add(mm ? mm[1] : 'GET', path);
+  }
+
   const re2 = /axios\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/gi;
   while ((m = re2.exec(src)) !== null) add(m[1], m[2]);
+
+  const reAxiosTemplate = /axios\.(get|post|put|patch|delete)\(\s*`([^`]+)`/gi;
+  while ((m = reAxiosTemplate.exec(src)) !== null) add(m[1], m[2]);
+
+  const helperPatterns = [
+    { re: /\bapiGet\(\s*["'`]([^"'`]+)["'`]/g, method: 'GET' },
+    { re: /\bapiDelete\(\s*["'`]([^"'`]+)["'`]/g, method: 'DELETE' },
+    { re: /\bapiSend\(\s*["'`]([^"'`]+)["'`]\s*,\s*["'`](GET|POST|PUT|PATCH|DELETE)["'`]/g, methodFromMatch: 2 },
+    { re: /\bapiGet\(\s*([^)]+)\)/g, method: 'GET' },
+    { re: /\bapiDelete\(\s*([^)]+)\)/g, method: 'DELETE' },
+    { re: /\bapiSend\(\s*([^,]+)\s*,\s*["'`](GET|POST|PUT|PATCH|DELETE)["'`]/g, methodFromMatch: 2 },
+  ];
+  for (const pattern of helperPatterns) {
+    while ((m = pattern.re.exec(src)) !== null) {
+      const path = m[1] || '';
+      const method = pattern.methodFromMatch ? (m[pattern.methodFromMatch] || 'GET') : pattern.method;
+      add(method, path);
+    }
+  }
 
   return Array.from(map.values());
 }
@@ -411,24 +845,78 @@ function extractBackendApiContracts(serverCode = '') {
   return set;
 }
 
+async function fetchRuntimeHealth(runtime) {
+  const runtimeBaseUrl = getRuntimeBaseUrl(runtime);
+  if (!runtimeBaseUrl) return null;
+  try {
+    const res = await fetchWithTimeout(`${runtimeBaseUrl}/health`, { timeoutMs: 1500 });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 function injectMissingApiStubs(frontendCode = '', serverCode = '') {
   const wanted = extractFrontendApiContracts(frontendCode);
   if (!wanted.length) return { code: serverCode, missing: [] };
 
   const have = extractBackendApiContracts(serverCode || '');
-  const missing = wanted.filter(c => !have.has(`${c.method} ${c.path}`));
+  const buildAliases = (method, path) => {
+    const cleanMethod = String(method || '').toUpperCase();
+    const cleanPath = String(path || '').trim().replace(/\/+$/g, '');
+    const aliases = new Set([`${cleanMethod} ${cleanPath}`]);
+    if (cleanPath.startsWith('/api/') && /\/:id$/.test(cleanPath)) {
+      aliases.add(`${cleanMethod} ${cleanPath.replace(/\/:id$/, '')}`);
+    } else if (cleanPath.startsWith('/api/') && !/:([A-Za-z_][A-Za-z0-9_]*)/.test(cleanPath)) {
+      aliases.add(`${cleanMethod} ${cleanPath}/:id`);
+    }
+    return aliases;
+  };
+  const missing = wanted.filter(c => !Array.from(buildAliases(c.method, c.path)).some(key => have.has(key)));
   if (missing.length === 0) return { code: serverCode, missing };
 
+  // Build smarter stubs: stats routes get db-aware defaults
   const stubs = missing.map(c => {
-    const base = `\napp.${c.method.toLowerCase()}('${c.path}', (req, res) => {\n  return res.json({ ok: true, placeholder: true, route: '${c.method} ${c.path}', data: [] });\n});\n`;
+    const lower = c.method.toLowerCase();
+
+    // For /stats routes, generate a db-aware stub that tries to count from the likely table
+    if (c.method === 'GET' && /\/stats$/.test(c.path)) {
+      const segments = c.path.replace(/^\/api\//, '').split('/').filter(Boolean);
+      const resource = segments[0] || 'items';
+      return `\napp.${lower}('${c.path}', (req, res) => {\n  try {\n    const total = db.prepare('SELECT COUNT(*) as count FROM ${resource}').get();\n    return res.json({ total: total?.count || 0 });\n  } catch(e) {\n    return res.json({ total: 0, _stub: true });\n  }\n});\n`;
+    }
+
+    const listResp = c.method === 'GET'
+      ? '[]'
+      : `{ ok: true, placeholder: true, route: '${c.method} ${c.path}' }`;
+
+    const base = `\napp.${lower}('${c.path}', (req, res) => {\n  return res.json(${listResp});\n});\n`;
+
     if (c.path.endsWith('/')) {
-      return base + `\napp.${c.method.toLowerCase()}('${c.path}:id', (req, res) => {\n  return res.json({ ok: true, placeholder: true, route: '${c.method} ${c.path}:id', id: req.params.id, data: [] });\n});\n`;
+      const itemResp = c.method === 'GET'
+        ? `{ id: req.params.id }`
+        : `{ ok: true, placeholder: true, route: '${c.method} ${c.path}:id', id: req.params.id }`;
+      return base + `\napp.${lower}('${c.path}:id', (req, res) => {\n  return res.json(${itemResp});\n});\n`;
     }
     return base;
   }).join('\n');
 
+  // Insert stubs BEFORE any existing parameterized routes to avoid shadowing
+  // Find the best insertion point: before the first /:param route at a matching prefix
+  let insertionCode = serverCode || '';
+  const stubBlock = `\n// Auto-added API contract stubs to prevent runtime 404\n${stubs}`;
+
+  // Try to insert stubs at the top of the route section (after any helper functions/variables)
+  const firstRouteMatch = insertionCode.match(/\napp\.(get|post|put|patch|delete)\(/);
+  if (firstRouteMatch && firstRouteMatch.index != null) {
+    insertionCode = insertionCode.slice(0, firstRouteMatch.index) + stubBlock + insertionCode.slice(firstRouteMatch.index);
+  } else {
+    insertionCode = `${insertionCode}\n${stubBlock}`;
+  }
+
   return {
-    code: `${serverCode || ''}\n\n// Auto-added API contract stubs to prevent runtime 404\n${stubs}`,
+    code: insertionCode,
     missing,
   };
 }
@@ -512,92 +1000,903 @@ function dryRunSqlSchema(sql = '') {
   }
 }
 
-function extractDesignTokensFromPrompt(text = '') {
-  const m = String(text || '').match(/- Design tokens must include:\s*(.+)/i);
-  if (!m) return [];
-  return String(m[1]).split('|').map(s => s.trim()).filter(Boolean);
+function looksLikeStaticSqlText(value = '') {
+  return /\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|WITH|PRAGMA)\b/i.test(String(value || ''));
 }
 
-function isDesignApplied(frontendCode = '', tokens = []) {
-  const src = String(frontendCode || '');
-  if (!tokens.length) return true;
-  return tokens.every(t => src.includes(t));
-}
-
-function validateGeneratedArtifacts(frontendCode = '', serverCode = '', sqlCode = '') {
-  const errors = [];
-
-  const sqlIssues = lintSqlDialect(sqlCode);
-  if (sqlIssues.length) errors.push(...sqlIssues.map(s => `SQL lint: ${s}`));
-
-  const dry = dryRunSqlSchema(sqlCode);
-  if (!dry.ok) errors.push(`SQL dry-run failed: ${dry.error}`);
-
-  // API contract check (frontend fetches should exist in backend)
-  const wanted = extractFrontendApiContracts(frontendCode);
-  const have = extractBackendApiContracts(serverCode);
-  const miss = wanted.filter(c => !have.has(`${c.method} ${c.path}`));
-  if (miss.length) {
-    errors.push(`Backend missing ${miss.length} API contract(s): ${miss.slice(0, 4).map(m => `${m.method} ${m.path}`).join(', ')}`);
+function evaluateStaticStringExpression(expr = '') {
+  const raw = String(expr || '').trim();
+  if (!raw) return null;
+  const stripped = raw.replace(/`(?:\\[\s\S]|[^`])*`|"(?:\\[\s\S]|[^"])*"|'(?:\\[\s\S]|[^'])*'/g, (token) => {
+    if (token.startsWith('`') && token.includes('${')) return '__FUNFO_DYNAMIC_TEMPLATE__';
+    return '';
+  });
+  if (stripped.includes('__FUNFO_DYNAMIC_TEMPLATE__')) return null;
+  if (!/^[\s+()]*$/.test(stripped)) return null;
+  try {
+    const value = Function(`"use strict"; return (${raw});`)();
+    return typeof value === 'string' ? value : null;
+  } catch {
+    return null;
   }
-
-  return { ok: errors.length === 0, errors };
 }
 
-async function callOpenClawOnce(messages) {
-  const timeoutMs = Number(process.env.OPENCLAW_TIMEOUT_MS || '140000');
-  const maxAttempts = Number(process.env.OPENCLAW_MAX_RETRY || '2');
-  const urlMasked = OPENCLAW_URL.replace(/\/[^/]*$/, '/...'); // 仅用于日志，不暴露 path 细节
+function applyTextReplacements(code = '', replacements = []) {
+  if (!replacements.length) return code;
+  const sorted = [...replacements].sort((a, b) => b.start - a.start);
+  let out = String(code || '');
+  for (const item of sorted) {
+    out = out.slice(0, item.start) + item.replacement + out.slice(item.end);
+  }
+  return out;
+}
 
-  let lastErr = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      if (attempt === 1) console.log(`[OpenClaw] 请求中 ${urlMasked} (timeout=${timeoutMs}ms)`);
-      const response = await fetch(OPENCLAW_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${OPENCLAW_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'openclaw',
-          stream: false,
-          messages,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`OpenClaw ${response.status}: ${body.slice(0, 300)}`);
+function walkDbPrepareCalls(code = '', visitor = () => {}) {
+  const src = String(code || '');
+  const needle = 'db.prepare(';
+  let cursor = 0;
+  while (cursor < src.length) {
+    const start = src.indexOf(needle, cursor);
+    if (start < 0) break;
+    const argsStart = start + needle.length;
+    let i = argsStart;
+    let depth = 1;
+    let quote = null;
+    let escaped = false;
+    for (; i < src.length; i++) {
+      const ch = src[i];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (ch === quote) {
+          quote = null;
+        }
+        continue;
       }
+      if (ch === '"' || ch === '\'' || ch === '`') {
+        quote = ch;
+        continue;
+      }
+      if (ch === '(') {
+        depth += 1;
+        continue;
+      }
+      if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          const argExpr = src.slice(argsStart, i);
+          visitor({
+            start,
+            end: i + 1,
+            expressionStart: argsStart,
+            expressionEnd: i,
+            argExpr,
+          });
+          break;
+        }
+      }
+    }
+    cursor = i + 1;
+  }
+}
 
-      const json = await response.json();
-      const content = json?.choices?.[0]?.message?.content;
-      if (!content) throw new Error('Empty model response');
-      console.log(`[OpenClaw] 成功 响应长度=${content.length}`);
-      return content;
-    } catch (e) {
-      lastErr = e;
-      const msg = String(e?.message || e || '');
-      console.warn(`[OpenClaw] 尝试 ${attempt}/${maxAttempts} 失败: ${msg.slice(0, 120)}`);
-      const retryable = /aborted|timeout|timed out|fetch failed|network|5\d\d/i.test(msg);
-      if (!(retryable && attempt < maxAttempts)) break;
-      await new Promise(r => setTimeout(r, 800 * attempt));
-    } finally {
-      clearTimeout(timer);
+function buildStaticSqlBindingMap(serverCode = '') {
+  const bindings = new Map();
+  const src = String(serverCode || '');
+  const assignmentRe = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]*?);/g;
+  let m;
+  while ((m = assignmentRe.exec(src)) !== null) {
+    const name = m[1];
+    const expr = m[2];
+    const value = evaluateStaticStringExpression(expr);
+    if (value != null && looksLikeStaticSqlText(value)) {
+      bindings.set(name, value);
     }
   }
-
-  const m = String(lastErr?.message || lastErr || 'OpenClaw call failed');
-  console.error(`[OpenClaw] 最终失败: ${m.slice(0, 200)}`);
-  if (/aborted|timeout|timed out/i.test(m)) {
-    throw new Error('模型响应超时（已自动重试），请再试一次或简化一次需求');
-  }
-  throw new Error(m);
+  return bindings;
 }
+
+function normalizeBackendSqlStrings(serverCode = '') {
+  let code = String(serverCode || '');
+  let changed = false;
+  const rewrites = [];
+
+  code = code.replace(/((?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*)([\s\S]*?)(\s*;)/g, (match, prefix, name, expr, suffix) => {
+    const value = evaluateStaticStringExpression(expr);
+    if (value == null || !looksLikeStaticSqlText(value)) return match;
+    changed = true;
+    rewrites.push({ type: 'binding', name });
+    return `${prefix}${JSON.stringify(value)}${suffix}`;
+  });
+
+  const bindings = buildStaticSqlBindingMap(code);
+  const replacements = [];
+  walkDbPrepareCalls(code, ({ start, end, argExpr }) => {
+    const trimmed = String(argExpr || '').trim();
+    if (!trimmed) return;
+    let sql = evaluateStaticStringExpression(trimmed);
+    let rewriteType = 'inline';
+    if (sql == null && /^[A-Za-z_$][\w$]*$/.test(trimmed) && bindings.has(trimmed)) {
+      sql = bindings.get(trimmed);
+      rewriteType = 'binding_ref';
+    }
+    if (sql == null || !looksLikeStaticSqlText(sql)) return;
+    replacements.push({
+      start,
+      end,
+      replacement: `db.prepare(${JSON.stringify(sql)})`,
+    });
+    changed = true;
+    rewrites.push({ type: rewriteType, target: trimmed });
+  });
+
+  code = applyTextReplacements(code, replacements);
+  return { code, changed, rewrites };
+}
+
+/**
+ * Validate backend SQL statements against the schema by extracting
+ * all db.prepare('...') calls and dry-running them on a temp DB with the schema applied.
+ * Returns { ok, errors[] } where errors list SQL statements that would fail at runtime.
+ */
+function dryRunBackendAgainstSchema(serverCode = '', schemaSql = '') {
+  const schema = String(schemaSql || '').trim();
+  const normalization = normalizeBackendSqlStrings(serverCode || '');
+  const server = String(normalization.code || '').trim();
+  if (!schema || !server) return { ok: true, errors: [], tested: 0 };
+
+  const concatenationErrors = [];
+  if (/db\.prepare\(\s*(?:"[\s\S]*?"\s*\+|'[\s\S]*?'\s*\+|`[\s\S]*?`\s*\+)/.test(server)) {
+    concatenationErrors.push({
+      sql: 'db.prepare(<concatenated sql>)',
+      error: 'SQL is built by JavaScript string concatenation inside db.prepare(); release requires one complete SQLite query string.',
+      kind: 'sql_concatenation',
+    });
+  }
+  const concatenatedVars = [...server.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([\s\S]*?);/g)]
+    .filter(([, , expr]) => /["'`][\s\S]*?\+[\s\S]*?["'`]/.test(expr))
+    .map(([, name]) => name);
+  for (const name of concatenatedVars) {
+    if (new RegExp(`db\\.prepare\\(\\s*${name}\\s*\\)`).test(server)) {
+      concatenationErrors.push({
+        sql: `db.prepare(${name})`,
+        error: `SQL variable "${name}" is assembled by JS concatenation; release requires a single complete SQLite query string.`,
+        kind: 'sql_concatenation',
+      });
+    }
+  }
+  if (concatenationErrors.length) {
+    return { ok: false, errors: concatenationErrors, tested: 0 };
+  }
+
+  const tmp = path.join(os.tmpdir(), `funfo-backend-dryrun-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
+  let testDb;
+  try {
+    testDb = new BetterSqlite3(tmp);
+    testDb.exec(schema);
+
+    // Extract SQL from db.prepare('...') patterns
+    const sqlStatements = [];
+    const bindings = buildStaticSqlBindingMap(server);
+    walkDbPrepareCalls(server, ({ argExpr }) => {
+      const trimmed = String(argExpr || '').trim();
+      if (!trimmed) return;
+      let sql = evaluateStaticStringExpression(trimmed);
+      if (sql == null && /^[A-Za-z_$][\w$]*$/.test(trimmed) && bindings.has(trimmed)) {
+        sql = bindings.get(trimmed);
+      }
+      if (sql && sql.trim()) sqlStatements.push(sql.trim());
+    });
+
+    const errors = [];
+    const seen = new Set();
+    for (const sql of sqlStatements) {
+      // Replace template literal placeholders with dummy values for validation
+      let testSql = sql
+        .replace(/\$\{[^}]+\}/g, '1')
+        .replace(/\?\s*$/g, '?');
+
+      // Skip if already tested
+      if (seen.has(testSql)) continue;
+      seen.add(testSql);
+
+      // Skip non-query statements that are hard to dry-run (INSERT with values)
+      if (/\bINSERT\b/i.test(testSql)) continue; // INSERT needs actual values
+      if (/\bUPDATE\b.*\bSET\b/i.test(testSql)) continue; // UPDATE needs values
+      if (/\bDELETE\b/i.test(testSql)) continue; // DELETE is destructive
+
+      try {
+        // For SELECT statements, just prepare (don't run) to validate columns exist
+        testDb.prepare(testSql);
+      } catch (e) {
+        const raw = String(e?.message || e).slice(0, 200);
+        const normalized = /no such column:\s*""|string literal in single-quotes/i.test(raw)
+          ? 'SQLite string literal error. Use single quotes for strings and empty string literals (for example: COALESCE(x, \'\') instead of COALESCE(x, "")).'
+          : /near\s+['"][+]['"]|near\s+['"][.]['"]|near\s+['"][()]['"]/.test(raw)
+            ? 'SQLite parse error. This usually means the generated SQL still contains JS string fragments or an incomplete query; emit one complete SQLite statement in db.prepare(...).'
+            : raw;
+        const kind = /no such column:\s*""|string literal in single-quotes/i.test(raw) ? 'sqlite_string_literal' : 'sqlite_prepare';
+        errors.push({ sql: testSql.slice(0, 200), error: normalized, kind });
+      }
+    }
+
+    return { ok: errors.length === 0, errors, tested: seen.size, normalized: normalization.changed };
+  } catch (e) {
+    return { ok: false, errors: [{ sql: 'schema', error: String(e?.message || e).slice(0, 200) }], tested: 0 };
+  } finally {
+    try { testDb?.close(); } catch {}
+    try { fs.existsSync(tmp) && fs.unlinkSync(tmp); } catch {}
+  }
+}
+
+const validation = createValidationModule({
+  babel,
+  BABEL_PRESET_REACT,
+  lintSqlDialect,
+  dryRunSqlSchema,
+  extractFrontendApiContracts,
+  extractBackendApiContracts,
+  evaluateStaticStringExpression,
+  looksLikeStaticSqlText,
+});
+
+const {
+  extractDesignTokensFromPrompt,
+  isDesignApplied,
+  findUndefinedJsxComponents,
+  validateFrontendOnlyArtifacts,
+  inferWorkspaceIterationProfile,
+  validateWorkspaceIterationEarly,
+  estimateLineChangeRatio,
+  inferAllowedChangeRatio,
+  extractStableIdentifiers,
+  hasStructuralOverlap,
+  isIncrementalChangePreferred,
+  validateGeneratedArtifacts,
+} = validation;
+
+const publish = createPublishModule({
+  db,
+  withPreviewLink,
+  getPreviewPort,
+  getApiPort,
+});
+
+const verifier = createVerifierModule({
+  getAppDir,
+  hydrateVersionRow,
+  getContainerRuntime,
+  waitRuntimeReady,
+  extractFrontendApiContracts,
+  extractBackendApiContracts,
+  fetchRuntimeHealth,
+  runBrowserSmoke,
+  resolveBrowserSmokeUrl: resolveVerifierBrowserSmokeUrl,
+});
+const { verifyAppRelease, mapVerifierCheckToFailure } = verifier;
+
+const {
+  PUBLISH_STEP_TEMPLATES,
+  publishJobsInFlight,
+  createPublishSteps,
+  parsePublishSteps,
+  getPublishJob,
+  savePublishJob,
+  setPublishStep,
+  startPublishJobRecord,
+  finishPublishJobRecord,
+  buildPublishStatusResponse,
+  requestPublishCancel,
+  clearPublishCancel,
+  isPublishCancelRequested,
+} = publish;
+function getAppDir(appId) {
+  return path.join(__dirname, 'apps', String(appId));
+}
+
+function getVersionDir(appId, versionNumber) {
+  return path.join(getAppDir(appId), 'versions', `v${versionNumber}`);
+}
+
+function inspectSqliteSchema(dbPath) {
+  try {
+    if (!fs.existsSync(dbPath)) return { exists: false, tables: {} };
+    const sqlite = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
+    const rows = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    const tables = {};
+    for (const row of rows) {
+      const cols = sqlite.prepare(`PRAGMA table_info(${row.name})`).all().map(c => c.name);
+      tables[row.name] = cols;
+    }
+    sqlite.close();
+    return { exists: true, tables };
+  } catch (e) {
+    return { exists: false, error: String(e?.message || e), tables: {} };
+  }
+}
+
+function extractExpectedSchemaFromDoc(dbSchemaDoc = '') {
+  const out = {};
+  const sql = String(dbSchemaDoc || '');
+  const matches = [...sql.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\(([^]*?)\);/gi)];
+  for (const m of matches) {
+    const table = String(m[1] || '').trim();
+    const body = String(m[2] || '');
+    const cols = [];
+    for (const raw of body.split(',')) {
+      const line = raw.trim();
+      if (!line || /^(PRIMARY|FOREIGN|UNIQUE|CONSTRAINT|CHECK)\b/i.test(line)) continue;
+      const mm = line.match(/^(\w+)\s+/);
+      if (mm) cols.push(mm[1]);
+    }
+    out[table] = cols;
+  }
+  return out;
+}
+
+function buildSchemaDiffWarning(appId, dbSchemaDoc = '') {
+  const expected = extractExpectedSchemaFromDoc(dbSchemaDoc);
+  if (!Object.keys(expected).length) return '';
+  const appDir = getAppDir(appId);
+  const devInfo = inspectSqliteSchema(path.join(appDir, 'data_dev.sqlite'));
+  const prodInfo = inspectSqliteSchema(path.join(appDir, 'data_prod.sqlite'));
+  const safeLines = [];
+  const riskLines = [];
+  const compare = (label, info) => {
+    if (!info.exists) {
+      riskLines.push(`- ${label}: database file missing or unreadable`);
+      return;
+    }
+    for (const [table, cols] of Object.entries(expected)) {
+      if (!info.tables[table]) {
+        safeLines.push(`- ${label}: missing table ${table} (safe direction: add table)`);
+        continue;
+      }
+      const missing = cols.filter(c => !info.tables[table].includes(c));
+      if (missing.length) safeLines.push(`- ${label}: ${table} missing columns ${missing.join(', ')} (safe direction: add column)`);
+      const extra = info.tables[table].filter(c => !cols.includes(c));
+      if (extra.length) riskLines.push(`- ${label}: ${table} has extra existing columns ${extra.join(', ')} (dangerous to drop/rename without migration)`);
+    }
+  };
+  compare('data_dev.sqlite', devInfo);
+  compare('data_prod.sqlite', prodInfo);
+  if (!safeLines.length && !riskLines.length) return '';
+  return `Current runtime databases do not fully match schema.sql for app ${appId}.\n\nSafe migration-first actions:\n${safeLines.length ? safeLines.join('\n') : '- none'}\n\nPotentially dangerous actions requiring explicit migration planning:\n${riskLines.length ? riskLines.join('\n') : '- none'}\n\nTreat this as an existing app migration task. Prefer additive evolution (ADD COLUMN / ADD TABLE / backfill). Do not assume an empty database. Do not silently rebuild or drop existing structures.`;
+}
+
+const docs = createDocsModule({
+  db,
+  getAppDir,
+  extractBackendApiContracts,
+  extractFrontendApiContracts,
+  extractSqlTables,
+  buildWorkspacePreviewPath,
+  buildWorkspacePublicPath,
+  writeAppContextManifest,
+});
+
+const {
+  getDocsDir,
+  getAppSpecPath,
+  getApiContractPath,
+  getDbSchemaPath,
+  getAppManifestPath,
+  readAppSpec,
+  readApiContract,
+  readDbSchemaDoc,
+  getModeDocPath,
+  writeModeDoc,
+  readModeDoc,
+  updateWorkspaceModeDocs,
+  writeReleaseNotes,
+  writeReleaseReport,
+  writeReleaseManifest,
+  writeCreateProposalDocs,
+  writeApiAndDbDocs,
+  writeAppManifest,
+  appendAppSpecSnapshot,
+} = docs;
+
+function syncAppStructuredManifest(appId, appRow = null) {
+  try {
+    const row = appRow || db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+    if (!row) return;
+    const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+    const latest = hydrateVersionRow(appId, latestRaw);
+    if (!latest) return;
+    writeAppManifest(appId, {
+      appRow: row,
+      appName: row.name,
+      versionNumber: latest.version_number || row.current_version || null,
+      frontendCode: latest.code || '',
+      serverCode: latest.server_code || '',
+      sqlCode: latest.sql_code || '',
+    });
+  } catch (e) {
+    console.warn('structured manifest sync warning:', e?.message || e);
+  }
+}
+
+const publishPipeline = createPublishPipeline({
+  db,
+  publishJobsInFlight,
+  getEffectiveReleaseAppId,
+  hydrateVersionRow,
+  readLatestFrontendCodeFromFiles,
+  isReusablePublishBackend,
+  readVersionFiles,
+  setPublishStep,
+  callLlmOnce: (...args) => callLlmOnce(...args),
+  SYSTEM_PROMPT,
+  parseAIResponse,
+  injectMissingApiStubs,
+  isWorkspaceDraft,
+  validateServerCodeSyntax,
+  validatePublishSchemaSafety,
+  applySchemaToDbFile,
+  createReleaseBackupSnapshot,
+  ensurePreviewSlug,
+  deployAppBackend,
+  getAppBackendLogs,
+  getContainerRuntime,
+  waitRuntimeReady,
+  waitRuntimeReadyDetailed,
+  startPreview,
+  isPortReachable,
+  writeVersionFiles,
+  appendAppSpecSnapshot,
+  writeApiAndDbDocs,
+  writeReleaseReport,
+  writeReleaseManifest,
+  touchAppAccess,
+  startPublishJobRecord,
+  finishPublishJobRecord,
+  savePublishJob,
+  isPublishCancelRequested,
+  clearPublishCancel,
+  verifyAppRelease,
+  mapVerifierCheckToFailure,
+  setAppStage,
+  extractFrontendApiContracts,
+  extractBackendApiContracts,
+  dryRunBackendAgainstSchema,
+  normalizeBackendSqlStrings,
+  platformBaseUrl: `http://127.0.0.1:${PORT}`,
+});
+const { processPublishJob } = publishPipeline;
+
+function writeVersionFiles(appId, versionNumber, frontendCode = '', serverCode = '', sqlCode = '') {
+  try {
+    const vdir = getVersionDir(appId, versionNumber);
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vdir, 'App.jsx'), String(frontendCode || ''));
+    fs.writeFileSync(path.join(vdir, 'server.js'), String(serverCode || ''));
+    fs.writeFileSync(path.join(vdir, 'schema.sql'), String(sqlCode || ''));
+
+    const appDir = getAppDir(appId);
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.mkdirSync(path.join(appDir, 'runtime'), { recursive: true });
+    fs.mkdirSync(path.join(appDir, 'docs'), { recursive: true });
+    fs.mkdirSync(path.join(appDir, 'styles'), { recursive: true });
+    fs.mkdirSync(path.join(appDir, 'versions'), { recursive: true });
+    fs.writeFileSync(path.join(appDir, 'App.jsx'), String(frontendCode || ''));
+    fs.writeFileSync(path.join(appDir, 'server.js'), String(serverCode || ''));
+    fs.writeFileSync(path.join(appDir, 'schema.sql'), String(sqlCode || ''));
+    const readmePath = path.join(appDir, 'README.md');
+    if (!fs.existsSync(readmePath)) {
+      fs.writeFileSync(readmePath, `# funfo app ${appId}\n\nCore files stay at the app root for compatibility.\n\n- App.jsx\n- server.js\n- schema.sql\n\nSupport directories:\n- versions/\n- runtime/\n- docs/\n- styles/\n`);
+    }
+    const styleReadmePath = path.join(appDir, 'styles', 'README.md');
+    if (!fs.existsSync(styleReadmePath)) {
+      fs.writeFileSync(styleReadmePath, '# Styles\n\nPlace app-specific style files here, such as app.css or globals.css.\nKeep the current root App.jsx/server.js/schema.sql layout for compatibility, but prefer colocating new style assets inside this folder.\n');
+    }
+    const appCssPath = path.join(appDir, 'styles', 'app.css');
+    if (!fs.existsSync(appCssPath)) {
+      fs.writeFileSync(appCssPath, `/* funfo app ${appId} styles */\n/* Add app-specific styles here. Root-level frontend remains App.jsx for compatibility. */\n`);
+    }
+    const runtimeReadmePath = path.join(appDir, 'runtime', 'README.md');
+    if (!fs.existsSync(runtimeReadmePath)) {
+      fs.writeFileSync(runtimeReadmePath, '# Runtime\n\nThis folder is for runtime artifacts such as sqlite databases, WAL/SHM files, and other generated runtime state. Legacy flows may still write some of these files at the app root; new maintenance should gradually converge runtime artifacts here.\n');
+    }
+    for (const runtimeName of ['data_dev.sqlite', 'data_dev.sqlite-wal', 'data_dev.sqlite-shm', 'data_prod.sqlite', 'data_prod.sqlite-wal', 'data_prod.sqlite-shm']) {
+      const legacyPath = path.join(appDir, runtimeName);
+      const runtimePath = path.join(appDir, 'runtime', runtimeName);
+      if (fs.existsSync(legacyPath) && !fs.existsSync(runtimePath)) {
+        fs.copyFileSync(legacyPath, runtimePath);
+      }
+    }
+  } catch (e) {
+    console.warn('write version files warning:', e?.message || e);
+  }
+}
+
+function readLatestFrontendCodeFromFiles(appId) {
+  try {
+    const p = path.join(getAppDir(appId), 'App.jsx');
+    if (!fs.existsSync(p)) return '';
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function readVersionFiles(appId, versionNumber) {
+  try {
+    const vdir = getVersionDir(appId, versionNumber);
+    const read = (name) => {
+      const p = path.join(vdir, name);
+      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+    };
+    return {
+      code: read('App.jsx'),
+      server_code: read('server.js'),
+      sql_code: read('schema.sql'),
+    };
+  } catch {
+    return { code: '', server_code: '', sql_code: '' };
+  }
+}
+
+function hydrateVersionRow(appId, row) {
+  if (!row) return row;
+  const files = readVersionFiles(appId, row.version_number);
+  return {
+    ...row,
+    code: files.code || row.code || '',
+    server_code: files.server_code || row.server_code || '',
+    sql_code: files.sql_code || row.sql_code || '',
+  };
+}
+
+function hydrateVersionRows(appId, rows = []) {
+  return (rows || []).map(r => hydrateVersionRow(appId, r));
+}
+
+function ensureAppFilesMaterializedFromDb(appId) {
+  const appDir = getAppDir(appId);
+  const rootApp = path.join(appDir, 'App.jsx');
+  if (fs.existsSync(rootApp)) return;
+  const rows = db.prepare("SELECT version_number, ifnull(code,'') code, ifnull(server_code,'') server_code, ifnull(sql_code,'') sql_code FROM app_versions WHERE app_id = ? ORDER BY version_number ASC").all(appId);
+  if (!rows.length) return;
+  for (const r of rows) {
+    writeVersionFiles(appId, r.version_number, r.code || '', r.server_code || '', r.sql_code || '');
+  }
+}
+
+function syncAppVersionIndexFromFiles(appId) {
+  try {
+    const vRoot = path.join(getAppDir(appId), 'versions');
+    if (!fs.existsSync(vRoot)) return;
+    const dirs = fs.readdirSync(vRoot, { withFileTypes: true })
+      .filter(d => d.isDirectory() && /^v\d+$/.test(d.name))
+      .map(d => Number(d.name.slice(1)))
+      .filter(n => Number.isFinite(n) && n > 0)
+      .sort((a, b) => a - b);
+    if (!dirs.length) return;
+
+    const hasVersion = db.prepare('SELECT 1 FROM app_versions WHERE app_id = ? AND version_number = ? LIMIT 1');
+    const getVersion = db.prepare('SELECT id, ifnull(code, \'\') AS code, ifnull(server_code, \'\') AS server_code, ifnull(sql_code, \'\') AS sql_code FROM app_versions WHERE app_id = ? AND version_number = ? LIMIT 1');
+    const insVersion = db.prepare('INSERT INTO app_versions (app_id, version_number, label, code, server_code, sql_code) VALUES (?, ?, ?, ?, ?, ?)');
+    const patchVersion = db.prepare(`
+      UPDATE app_versions
+      SET
+        code = CASE WHEN ifnull(code, '') = '' THEN ? ELSE code END,
+        server_code = CASE WHEN ifnull(server_code, '') = '' THEN ? ELSE server_code END,
+        sql_code = CASE WHEN ifnull(sql_code, '') = '' THEN ? ELSE sql_code END
+      WHERE app_id = ? AND version_number = ?
+    `);
+
+    for (const v of dirs) {
+      const exists = hasVersion.get(appId, v);
+      if (!exists) {
+        insVersion.run(appId, v, `file-sync v${v}`, '', '', '');
+      }
+      const files = readVersionFiles(appId, v);
+      if (files.code || files.server_code || files.sql_code) {
+        const row = getVersion.get(appId, v);
+        const needsPatch = row && (
+          (!row.code && files.code) ||
+          (!row.server_code && files.server_code) ||
+          (!row.sql_code && files.sql_code)
+        );
+        if (needsPatch) {
+          patchVersion.run(files.code || '', files.server_code || '', files.sql_code || '', appId, v);
+        }
+      }
+    }
+
+    const maxDb = db.prepare('SELECT MAX(version_number) as mv FROM app_versions WHERE app_id = ?').get(appId)?.mv || 1;
+    db.prepare("UPDATE apps SET current_version = ?, updated_at = datetime('now') WHERE id = ?").run(maxDb, appId);
+  } catch (e) {
+    console.warn('sync versions from files warning:', e?.message || e);
+  }
+}
+
+
+function normalizeDocLines(text = '') {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !/^(app_id|version|updated_at):/i.test(line));
+}
+
+function parseApiContractDoc(text = '') {
+  const lines = normalizeDocLines(text);
+  const sections = { backend: [], frontend: [], missing: [] };
+  let current = null;
+  for (const line of lines) {
+    if (/^##\s+Backend routes/i.test(line)) {
+      current = 'backend';
+      continue;
+    }
+    if (/^##\s+Frontend API usage/i.test(line)) {
+      current = 'frontend';
+      continue;
+    }
+    if (/^##\s+Contract diff/i.test(line)) {
+      current = 'missing';
+      continue;
+    }
+    if (line.startsWith('- ')) {
+      const value = line.slice(2).trim();
+      if (!value || value === 'none' || !current) continue;
+      sections[current].push(value);
+    }
+  }
+  return {
+    backend: [...new Set(sections.backend)].sort(),
+    frontend: [...new Set(sections.frontend)].sort(),
+    missing: [...new Set(sections.missing)].sort(),
+  };
+}
+
+function normalizeSqlForComparison(sql = '') {
+  return String(sql || '')
+    .replace(/```sql[\s\S]*?```/gi, (block) => block.replace(/```sql\s*/i, '').replace(/```$/, ''))
+    .replace(/--.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([(),;=])\s*/g, '$1')
+    .trim()
+    .toLowerCase();
+}
+
+function extractSqlBlockFromDoc(text = '') {
+  const match = String(text || '').match(/```sql\n([\s\S]*?)```/i);
+  return (match?.[1] || '').trim();
+}
+
+function isReusablePublishBackend(appId, releaseAppId) {
+  if (!appId || !releaseAppId || Number(appId) === Number(releaseAppId)) {
+    return { reusable: false, reason: 'workspace draft comparison not applicable' };
+  }
+
+  const draftApiRaw = readApiContract(appId);
+  const releaseApiRaw = readApiContract(releaseAppId);
+  const draftSchemaRaw = readDbSchemaDoc(appId);
+  const releaseSchemaRaw = readDbSchemaDoc(releaseAppId);
+
+  if (!draftApiRaw || !releaseApiRaw || !draftSchemaRaw || !releaseSchemaRaw) {
+    return { reusable: false, reason: 'baseline docs missing' };
+  }
+
+  const draftApi = parseApiContractDoc(draftApiRaw);
+  const releaseApi = parseApiContractDoc(releaseApiRaw);
+  const draftSchemaSql = extractSqlBlockFromDoc(draftSchemaRaw);
+  const releaseSchemaSql = extractSqlBlockFromDoc(releaseSchemaRaw);
+
+  const sameBackendRoutes = JSON.stringify(draftApi.backend) === JSON.stringify(releaseApi.backend);
+  const sameFrontendUsage = JSON.stringify(draftApi.frontend) === JSON.stringify(releaseApi.frontend);
+  const sameMissing = JSON.stringify(draftApi.missing) === JSON.stringify(releaseApi.missing);
+  const sameSchema = normalizeSqlForComparison(draftSchemaSql) === normalizeSqlForComparison(releaseSchemaSql);
+
+  const reusable = sameBackendRoutes && sameFrontendUsage && sameMissing && sameSchema;
+  return {
+    reusable,
+    reason: reusable ? 'api contract and db schema unchanged' : 'api contract or db schema changed',
+    details: {
+      sameBackendRoutes,
+      sameFrontendUsage,
+      sameMissing,
+      sameSchema,
+    },
+  };
+}
+
+function cloneIterationBaselineDocs(sourceAppId, newAppId) {
+  try {
+    const srcDir = getDocsDir(sourceAppId);
+    const dstDir = getDocsDir(newAppId);
+    fs.mkdirSync(dstDir, { recursive: true });
+    const files = ['APP_SPEC.md', 'API_CONTRACT.md', 'DB_SCHEMA.md'];
+    for (const f of files) {
+      const s = path.join(srcDir, f);
+      const d = path.join(dstDir, f);
+      if (fs.existsSync(s)) fs.copyFileSync(s, d);
+    }
+  } catch (e) {
+    console.warn('clone baseline docs warning:', e?.message || e);
+  }
+}
+
+function copyDirRecursive(srcDir, dstDir) {
+  if (!fs.existsSync(srcDir)) return;
+  fs.mkdirSync(dstDir, { recursive: true });
+  for (const ent of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const src = path.join(srcDir, ent.name);
+    const dst = path.join(dstDir, ent.name);
+    if (ent.isDirectory()) copyDirRecursive(src, dst);
+    else if (ent.isFile()) fs.copyFileSync(src, dst);
+  }
+}
+
+function cloneAppAllFiles(sourceAppId, newAppId) {
+  const srcDir = getAppDir(sourceAppId);
+  const dstDir = getAppDir(newAppId);
+  if (fs.existsSync(dstDir)) fs.rmSync(dstDir, { recursive: true, force: true });
+  copyDirRecursive(srcDir, dstDir);
+}
+
+function removeAppFiles(appId) {
+  try {
+    fs.rmSync(getAppDir(appId), { recursive: true, force: true });
+  } catch (e) {
+    console.warn('remove app files warning:', e?.message || e);
+  }
+}
+
+function deleteAppDeep(appId, seen = new Set()) {
+  const id = Number(appId);
+  if (!Number.isFinite(id) || id <= 0 || seen.has(id)) return [];
+  seen.add(id);
+
+  const row = db.prepare('SELECT * FROM apps WHERE id = ?').get(id);
+  if (!row) return [];
+
+  const deleted = [];
+  const childDrafts = db.prepare("SELECT id FROM apps WHERE app_role = 'draft' AND release_app_id = ?").all(id);
+  for (const child of childDrafts) {
+    deleted.push(...deleteAppDeep(child.id, seen));
+  }
+
+  stopPreview(id);
+  stopAppBackend(id);
+
+  db.prepare('DELETE FROM app_favorites WHERE app_id = ?').run(id);
+  db.prepare('DELETE FROM messages WHERE app_id = ?').run(id);
+  db.prepare('DELETE FROM app_versions WHERE app_id = ?').run(id);
+  db.prepare('DELETE FROM publish_jobs WHERE app_id = ?').run(id);
+  db.prepare('DELETE FROM app_release_backups WHERE release_app_id = ? OR source_draft_app_id = ?').run(id, id);
+  db.prepare('UPDATE apps SET release_app_id = NULL WHERE release_app_id = ?').run(id);
+  db.prepare('DELETE FROM apps WHERE id = ?').run(id);
+  removeAppFiles(id);
+  deleted.push(id);
+  return deleted;
+}
+
+function listInvalidReleaseDrafts() {
+  return db.prepare(`
+    SELECT a.id, a.name, a.icon, a.owner_user_id, a.release_app_id, a.updated_at,
+           u.email as owner_email, u.nickname as owner_nickname
+    FROM apps a
+    LEFT JOIN apps r ON r.id = a.release_app_id
+    LEFT JOIN users u ON u.id = a.owner_user_id
+    WHERE a.app_role = 'draft'
+      AND a.release_app_id IS NOT NULL
+      AND r.id IS NULL
+    ORDER BY datetime(a.updated_at) DESC, a.id DESC
+  `).all();
+}
+
+function cleanupInvalidReleaseDrafts() {
+  const invalidDrafts = listInvalidReleaseDrafts();
+
+  const deletedIds = [];
+  for (const row of invalidDrafts) {
+    deletedIds.push(...deleteAppDeep(row.id));
+  }
+  return { deletedIds, count: deletedIds.length };
+}
+
+function getDirSizeBytes(dir) {
+  let total = 0;
+  try {
+    if (!fs.existsSync(dir)) return 0;
+    const stack = [dir];
+    while (stack.length) {
+      const current = stack.pop();
+      const entries = fs.readdirSync(current, { withFileTypes: true });
+      for (const entry of entries) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) stack.push(full);
+        else if (entry.isFile()) {
+          try { total += fs.statSync(full).size; } catch {}
+        }
+      }
+    }
+  } catch {}
+  return total;
+}
+
+function listOrphanAppResources() {
+  const root = path.join(__dirname, 'apps');
+  if (!fs.existsSync(root)) return [];
+  const dirs = fs.readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && /^\d+$/.test(d.name))
+    .map((d) => Number(d.name))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => a - b);
+
+  const out = [];
+  for (const id of dirs) {
+    const row = db.prepare('SELECT id FROM apps WHERE id = ?').get(id);
+    if (row) continue;
+    const dir = getAppDir(id);
+    const runtime = getContainerRuntime(id);
+    const sizeBytes = getDirSizeBytes(dir);
+    out.push({
+      id,
+      exists_in_db: false,
+      dir_exists: fs.existsSync(dir),
+      size_bytes: sizeBytes,
+      size_mb: Number((sizeBytes / 1024 / 1024).toFixed(2)),
+      runtime_running: !!runtime?.running,
+      runtime_container: runtime?.containerName || null,
+      preview_port: getPreviewPort(id) || null,
+      has_versions: fs.existsSync(path.join(dir, 'versions')),
+      has_prod_db: fs.existsSync(path.join(dir, 'data_prod.sqlite')),
+      has_dev_db: fs.existsSync(path.join(dir, 'data_dev.sqlite')),
+    });
+  }
+  return out.sort((a, b) => (b.size_bytes - a.size_bytes) || (a.id - b.id));
+}
+
+function cleanupOrphanAppResources(ids = []) {
+  const targets = listOrphanAppResources();
+  const allowed = new Set((Array.isArray(ids) && ids.length ? ids : targets.map((x) => x.id)).map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0));
+  const picked = targets.filter((item) => allowed.has(item.id));
+  const deletedIds = [];
+  let reclaimedBytes = 0;
+  for (const item of picked) {
+    stopPreview(item.id);
+    stopAppBackend(item.id);
+    removeAppFiles(item.id);
+    reclaimedBytes += Number(item.size_bytes || 0);
+    deletedIds.push(item.id);
+  }
+  return {
+    deletedIds,
+    count: deletedIds.length,
+    reclaimedBytes,
+    reclaimedMb: Number((reclaimedBytes / 1024 / 1024).toFixed(2)),
+  };
+}
+
+function validateClonedAppFiles(appId, currentVersion) {
+  const appDir = getAppDir(appId);
+  const rootApp = path.join(appDir, 'App.jsx');
+  const versionApp = path.join(getVersionDir(appId, currentVersion), 'App.jsx');
+  const hasRoot = fs.existsSync(rootApp) && fs.statSync(rootApp).size > 0;
+  const hasVersion = fs.existsSync(versionApp) && fs.statSync(versionApp).size > 0;
+  if (!hasRoot || !hasVersion) {
+    throw new Error(`clone file validation failed (root:${hasRoot} version:${hasVersion})`);
+  }
+}
+
+function extractSqlTables(sql = '') {
+  const out = [];
+  const re = /CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)/gi;
+  let m;
+  while ((m = re.exec(String(sql || '')))) out.push(m[1]);
+  return [...new Set(out)];
+}
+
 
 function hashPassword(password) {
   return crypto.createHash('sha256').update(password).digest('hex');
@@ -653,6 +1952,36 @@ function canAccessApp(appRow, req) {
   return ownerMatch || guestMatch;
 }
 
+const APP_STAGE_ORDER = [
+  'prototype',
+  'frontend_ready',
+  'backend_proposed',
+  'backend_generated',
+  'backend_verified',
+  'release_blocked',
+  'release_ready',
+  'published_live',
+  'repair_needed',
+];
+
+function normalizeAppStage(stage = '') {
+  const value = String(stage || '').trim();
+  return APP_STAGE_ORDER.includes(value) ? value : 'prototype';
+}
+
+function setAppStage(appId, stage, reason = null, extras = {}) {
+  const normalizedStage = normalizeAppStage(stage);
+  const fields = ['app_stage = ?', 'stage_reason = ?', "updated_at = datetime('now')"];
+  const values = [normalizedStage, reason || null];
+  for (const [key, value] of Object.entries(extras || {})) {
+    fields.push(`${key} = ?`);
+    values.push(value);
+  }
+  values.push(appId);
+  db.prepare(`UPDATE apps SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  return db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+}
+
 function isPortReachable(port, host = '127.0.0.1', timeoutMs = 1200) {
   return new Promise((resolve) => {
     if (!port) return resolve(false);
@@ -665,43 +1994,100 @@ function isPortReachable(port, host = '127.0.0.1', timeoutMs = 1200) {
   });
 }
 
-// Public preview links: http://host:3100/app/<8-char-slug>
-const handleAppSlug = async (req, res, next) => {
-  const slug = String(req.params.slug || '');
-  if (!/^[a-z0-9]{8}$/.test(slug)) return next();
-  const appRow = db.prepare('SELECT id FROM apps WHERE preview_slug = ?').get(slug);
-  if (!appRow) return next();
+function ensureAppRuntimeDir(appId) {
+  const dir = path.join(__dirname, 'apps', String(appId));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
-  if (req.path === `/app/${slug}`) {
-    const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-    return res.redirect(302, `/app/${slug}/${q}`);
+function validateServerCodeSyntax(appId, serverCode = '') {
+  const trimmed = String(serverCode || '').trim();
+  if (!trimmed) return { ok: true, skipped: true };
+  const dir = ensureAppRuntimeDir(appId);
+  const tmpPath = path.join(dir, '.publish-server-check.js');
+  fs.writeFileSync(tmpPath, trimmed);
+  try {
+    const r = require('child_process').spawnSync(process.execPath, ['--check', tmpPath], { encoding: 'utf8' });
+    if (r.status !== 0) {
+      throw new Error((r.stderr || r.stdout || 'server syntax check failed').trim());
+    }
+    return { ok: true };
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch {}
   }
+}
 
-  touchAppAccess(appRow.id);
-  await wakeAppRuntime(appRow.id);
+function applySchemaToDbFile(dbFile, schemaText = '') {
+  const sql = String(schemaText || '').trim();
+  const appDb = new BetterSqlite3(dbFile);
+  const applied = [];
+  try {
+    if (!sql) return { ok: true, applied, summary: 'schema empty' };
 
-  const pathPart = req.originalUrl.replace(new RegExp(`^/app/${slug}`), '') || '/';
+    appDb.exec(sql);
 
-  const runtime = getContainerRuntime(appRow.id);
-  const bound = !!runtime && runtime.labels?.['funfo.app_id'] === String(appRow.id) && runtime.labels?.['funfo.slug'] === slug;
+    const tableBlocks = [...sql.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)\s*\(([\s\S]*?)\);/gi)];
+    for (const m of tableBlocks) {
+      const table = m[1];
+      const body = m[2] || '';
+      const exists = appDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+      if (!exists) continue;
 
-  // /app/<slug>/api/* must be strictly bound to the app container
-  if (pathPart.startsWith('/api/')) {
-    if (!bound) return res.status(502).json({ error: 'Runtime binding mismatch' });
-    const ready = await waitRuntimeReady(runtime);
-    if (!ready) return res.status(502).json({ error: 'App backend starting, retry in 1s' });
-    return proxyToAppContainer(req, res, runtime, pathPart);
+      const currentCols = appDb.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+      const defs = body.split(',').map(x => x.trim()).filter(Boolean);
+      for (const d of defs) {
+        if (/^(PRIMARY|FOREIGN|UNIQUE|CONSTRAINT|CHECK)\b/i.test(d)) continue;
+        const mm = d.match(/^(\w+)\s+(.+)$/s);
+        if (!mm) continue;
+        const col = mm[1];
+        const colDef = `${col} ${mm[2].trim()}`;
+        if (!currentCols.includes(col)) {
+          try {
+            appDb.exec(`ALTER TABLE ${table} ADD COLUMN ${colDef}`);
+            applied.push(`ADD COLUMN ${table}.${col}`);
+          } catch (e) {
+            applied.push(`SKIP ${table}.${col}: ${String(e.message || e)}`);
+          }
+        }
+      }
+    }
+
+    return { ok: true, applied, summary: applied.length ? 'schema drift fixed' : 'schema already aligned' };
+  } finally {
+    try { appDb.close(); } catch {}
   }
+}
 
-  const previewPort = getPreviewPort(appRow.id);
-  if (!previewPort) return res.status(404).json({ error: 'Preview not running' });
 
+
+
+function validatePublishSchemaSafety(appId, schemaText = '') {
+  const dir = ensureAppRuntimeDir(appId);
+  const prodDbPath = path.join(dir, 'data_prod.sqlite');
+  const tempDbPath = path.join(dir, `.publish-check-${Date.now()}.sqlite`);
+  if (fs.existsSync(prodDbPath)) fs.copyFileSync(prodDbPath, tempDbPath);
+  const result = applySchemaToDbFile(tempDbPath, schemaText);
+  try { fs.unlinkSync(tempDbPath); } catch {}
+  return { ...result, targetDb: prodDbPath };
+}
+
+function isInternalLoopbackRequest(req) {
+  const raw = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+  return raw === '127.0.0.1' || raw === '::1' || raw === '::ffff:127.0.0.1' || raw === '';
+}
+
+function proxyToLocalPort(req, res, port, pathPart) {
+  const targetPort = Number(port);
+  if (!Number.isFinite(targetPort) || targetPort <= 0) {
+    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ error: 'Preview unavailable' }));
+  }
   const options = {
     hostname: '127.0.0.1',
-    port: previewPort,
-    path: pathPart,
+    port: targetPort,
+    path: pathPart || '/',
     method: req.method,
-    headers: { ...req.headers, host: `localhost:${previewPort}` },
+    headers: { ...req.headers, host: `localhost:${targetPort}` },
   };
   const proxy = http.request(options, (proxyRes) => {
     res.writeHead(proxyRes.statusCode, proxyRes.headers);
@@ -712,9 +2098,169 @@ const handleAppSlug = async (req, res, next) => {
     res.end(JSON.stringify({ error: 'Preview unavailable' }));
   });
   req.pipe(proxy);
+}
+
+const handleCandidateRoute = async (req, res) => {
+  if (!isInternalLoopbackRequest(req)) return res.status(403).json({ error: 'candidate route is internal only' });
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'Not found' });
+  const releaseState = deriveReleaseState(appRow);
+  if (releaseState !== 'candidate') return res.status(409).json({ error: 'app is not in candidate state', release_state: releaseState });
+  const runtime = getContainerRuntime(appId);
+  const bound = !!runtime && runtime.labels?.['funfo.app_id'] === String(appId);
+  if (!bound) return res.status(502).json({ error: 'Candidate runtime not bound' });
+  const ready = await waitRuntimeReady({ appId, runtime });
+  if (!ready) return res.status(502).json({ error: 'Candidate runtime starting' });
+  const pathPart = req.originalUrl.replace(new RegExp(`^/__candidate/app/${appId}`), '') || '/';
+  return proxyToAppContainer(req, res, runtime, pathPart);
 };
+
+const handleWorkspacePublicRoute = async (req, res, next) => {
+  const parsed = parseWorkspaceRouteToken(req.params.workspaceSlug || '');
+  const workspaceSlug = parsed.workspaceSlug;
+  if (!/^w_[a-z0-9]{12}$/.test(workspaceSlug)) return next();
+
+  const appRow = db.prepare('SELECT * FROM apps WHERE workspace_slug = ?').get(workspaceSlug);
+  if (!appRow) return next();
+
+  const routeBase = parsed.isPreview ? buildWorkspacePreviewPath(workspaceSlug) : buildWorkspacePublicPath(workspaceSlug);
+  if (req.path === routeBase) {
+    const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    return res.redirect(302, `${routeBase}/${q}`);
+  }
+
+  const releaseState = deriveReleaseState(appRow);
+  const isPublicRelease = ['live', 'rollback'].includes(releaseState);
+  if (!parsed.isPreview && !isPublicRelease) {
+    return res.status(409).json({
+      error: 'App 尚未公开发布。请使用 preview 链接查看当前开发版本。',
+      release_state: releaseState,
+      preview_path: buildWorkspacePreviewPath(workspaceSlug),
+    });
+  }
+
+  touchAppAccess(appRow.id);
+  recordAppVisit(appRow.id, req, parsed.isPreview ? 'workspace-preview' : 'workspace-public');
+  if (parsed.isPreview || releaseState !== 'failed') {
+    await wakeAppRuntime(appRow.id);
+  }
+
+  const pathPart = req.originalUrl.replace(new RegExp(`^${routeBase}`), '') || '/';
+  const runtime = getContainerRuntime(appRow.id);
+  const isServerRuntime = appRow.runtime_mode === 'server' && !parsed.isPreview && isPublicRelease;
+  const bound = !!runtime
+    && runtime.labels?.['funfo.app_id'] === String(appRow.id)
+    && runtime.labels?.['funfo.slug'] === String(appRow.preview_slug || ensurePreviewSlug(appRow.id));
+
+  if (isServerRuntime) {
+    if (!bound) return res.status(502).json({ error: 'Runtime binding mismatch' });
+    const ready = await waitRuntimeReady({ appId: appRow.id, runtime });
+    if (!ready) return res.status(502).json({ error: 'App backend starting, retry in 1s' });
+    return proxyToAppContainer(req, res, runtime, pathPart || '/');
+  }
+
+  if (pathPart.startsWith('/api/')) {
+    if (!bound) return res.status(502).json({ error: 'Runtime binding mismatch' });
+    const ready = await waitRuntimeReady({ appId: appRow.id, runtime });
+    if (!ready) return res.status(502).json({ error: 'App backend starting, retry in 1s' });
+    return proxyToAppContainer(req, res, runtime, pathPart);
+  }
+
+  const previewPort = getPreviewPort(appRow.id);
+  if (!previewPort) {
+    return res.status(404).json({ error: parsed.isPreview ? 'Preview not running' : 'Public app preview unavailable' });
+  }
+  return proxyToLocalPort(req, res, previewPort, pathPart);
+};
+
+// Public preview links: http://host:3100/app/<8-char-slug>
+const handleAppSlug = async (req, res, next) => {
+  const slug = String(req.params.slug || '');
+  if (!/^[a-z0-9]{8}$/.test(slug)) return next();
+  let appRow = db.prepare('SELECT id FROM apps WHERE preview_slug = ?').get(slug);
+  if (!appRow) {
+    const previewSession = getPreviewSessionBySlug(slug);
+    if (previewSession) appRow = { id: null, _sessionOnly: true };
+  }
+  if (!appRow) return next();
+
+  if (req.path === `/app/${slug}`) {
+    const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    return res.redirect(302, `/app/${slug}/${q}`);
+  }
+
+  const fullAppRow = appRow.id ? db.prepare('SELECT * FROM apps WHERE id = ?').get(appRow.id) : null;
+  const releaseState = fullAppRow ? deriveReleaseState(fullAppRow) : 'draft';
+  const isServerRuntime = !!fullAppRow && fullAppRow.runtime_mode === 'server' && fullAppRow.status !== 'draft' && (releaseState === 'live' || releaseState === 'rollback');
+
+  if (appRow.id) {
+    touchAppAccess(appRow.id);
+    recordAppVisit(appRow.id, req, isServerRuntime ? 'server-runtime' : 'preview');
+    if (releaseState !== 'failed') {
+      await wakeAppRuntime(appRow.id);
+    }
+  }
+
+  const pathPart = req.originalUrl.replace(new RegExp(`^/app/${slug}`), '') || '/';
+  const previewAssetNames = new Set(['/react.js', '/react-is.js', '/react-dom.js', '/prop-types.js', '/recharts.js']);
+
+  let runtime = appRow.id ? getContainerRuntime(appRow.id) : null;
+  let bound = !!runtime && runtime.labels?.['funfo.app_id'] === String(appRow.id) && runtime.labels?.['funfo.slug'] === slug;
+
+  if (releaseState === 'failed') {
+    return res.status(409).json({ error: 'Release candidate failed and is not promoted live', release_state: releaseState });
+  }
+
+  if (!isServerRuntime && previewAssetNames.has(pathPart)) {
+    return proxyPreviewRequest(req, res, slug);
+  }
+
+  // server-mode apps: route ALL public paths through the live/rollback app container
+  if (isServerRuntime) {
+    // auto-heal binding mismatch on first-hit or stale container labels
+    if (!bound) {
+      try {
+        const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appRow.id);
+        const latest = hydrateVersionRow(appRow.id, latestRaw);
+        const contract = injectMissingApiStubs(latest?.code || '', latest?.server_code || '');
+        const normalizedServer = normalizeBackendSqlStrings(contract.code || '');
+        const serverToUse = normalizedServer.code || contract.code;
+        if (serverToUse && serverToUse.trim()) {
+          await deployAppBackend(appRow.id, serverToUse, latest?.sql_code || '', slug, { frontendCode: latest?.code || '', dbMode: isServerRuntime ? 'prod' : 'dev' });
+          if (latest?.id) db.prepare('UPDATE app_versions SET server_code = ? WHERE id = ?').run(serverToUse, latest.id);
+          runtime = getContainerRuntime(appRow.id);
+          bound = !!runtime && runtime.labels?.['funfo.app_id'] === String(appRow.id) && runtime.labels?.['funfo.slug'] === slug;
+        }
+      } catch (e) {
+        console.warn('runtime rebind warning:', e?.message || e);
+      }
+    }
+
+    if (!bound) return res.status(502).json({ error: 'Runtime binding mismatch' });
+    const ready = await waitRuntimeReady({ appId: appRow.id, runtime });
+    if (!ready) return res.status(502).json({ error: 'App backend starting, retry in 1s' });
+    return proxyToAppContainer(req, res, runtime, pathPart || '/');
+  }
+
+  // /app/<slug>/api/* must be strictly bound to the app container in preview mode too
+  if (pathPart.startsWith('/api/')) {
+    if (!bound) return res.status(502).json({ error: 'Runtime binding mismatch' });
+    const ready = await waitRuntimeReady({ appId: appRow.id, runtime });
+    if (!ready) return res.status(502).json({ error: 'App backend starting, retry in 1s' });
+    return proxyToAppContainer(req, res, runtime, pathPart);
+  }
+
+  const previewPort = getPreviewPort(appRow.id);
+  if (!previewPort) return res.status(404).json({ error: 'Preview not running' });
+  return proxyToLocalPort(req, res, previewPort, pathPart);
+};
+app.all('/w/:workspaceSlug', handleWorkspacePublicRoute);
+app.all('/w/:workspaceSlug/*rest', handleWorkspacePublicRoute);
 app.all('/app/:slug', handleAppSlug);
 app.all('/app/:slug/*rest', handleAppSlug);
+app.all('/__candidate/app/:id', handleCandidateRoute);
+app.all('/__candidate/app/:id/*rest', handleCandidateRoute);
 
 // ── Auth ──────────────────────────────────────────────────────────────
 app.post('/api/auth/register', (req, res) => {
@@ -780,49 +2326,6 @@ app.get('/api/auth/check-email', (req, res) => {
   res.json({ exists });
 });
 
-// 调试：检测 OpenClaw 是否可达（不暴露 token，仅用于运维排查）
-app.get('/api/debug/openclaw-ping', async (req, res) => {
-  const urlMasked = OPENCLAW_URL.replace(/\/[^/]*$/, '/...');
-  const timeoutMs = 15000;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const response = await fetch(OPENCLAW_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENCLAW_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'openclaw',
-        stream: false,
-        messages: [{ role: 'user', content: 'reply with exactly: pong' }],
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    const body = await response.text();
-    let contentLength = 0;
-    try {
-      const j = JSON.parse(body);
-      contentLength = (j?.choices?.[0]?.message?.content || '').length;
-    } catch {}
-    res.json({
-      ok: response.ok && contentLength >= 0,
-      urlMasked,
-      status: response.status,
-      message: response.ok ? `OpenClaw 正常 (响应长度 ${contentLength})` : `HTTP ${response.status}: ${body.slice(0, 100)}`,
-      responseLength: contentLength,
-    });
-  } catch (e) {
-    res.json({
-      ok: false,
-      urlMasked,
-      status: 0,
-      message: String(e?.message || e).slice(0, 200),
-    });
-  }
-});
 
 app.post('/api/auth/reset-password', (req, res) => {
   const { token, newPassword } = req.body || {};
@@ -864,7 +2367,7 @@ app.get('/api/apps', (req, res) => {
         (SELECT COUNT(*) FROM app_versions WHERE app_id = a.id) as version_count,
         (SELECT COUNT(*) FROM app_favorites f WHERE f.app_id = a.id AND f.user_id = ?) as is_favorite
       FROM apps a
-      WHERE a.status = 'published' OR a.owner_user_id = ?
+      WHERE a.release_state = 'live' OR a.owner_user_id = ?
       ORDER BY a.updated_at DESC
     `).all(user.id, user.id)
     : db.prepare(`
@@ -872,77 +2375,371 @@ app.get('/api/apps', (req, res) => {
         (SELECT COUNT(*) FROM app_versions WHERE app_id = a.id) as version_count,
         0 as is_favorite
       FROM apps a
-      WHERE a.status = 'published'
+      WHERE a.release_state = 'live'
       ORDER BY a.updated_at DESC
     `).all();
 
-  res.json(apps.map(a => {
+  for (const a of apps) {
+    ensureAppFilesMaterializedFromDb(Number(a.id));
+    syncAppVersionIndexFromFiles(Number(a.id));
+  }
+
+  const freshApps = (user
+    ? db.prepare(`
+      SELECT a.*,
+        (SELECT COUNT(*) FROM app_versions WHERE app_id = a.id) as version_count,
+        (SELECT COUNT(*) FROM app_favorites f WHERE f.app_id = a.id AND f.user_id = ?) as is_favorite
+      FROM apps a
+      WHERE a.release_state = 'live' OR a.owner_user_id = ?
+      ORDER BY a.updated_at DESC
+    `).all(user.id, user.id)
+    : db.prepare(`
+      SELECT a.*,
+        (SELECT COUNT(*) FROM app_versions WHERE app_id = a.id) as version_count,
+        0 as is_favorite
+      FROM apps a
+      WHERE a.release_state = 'live'
+      ORDER BY a.updated_at DESC
+    `).all());
+
+  res.json(freshApps.map(a => {
     const withLink = withPreviewLink(a);
     return {
       ...withLink,
+      release_state: deriveReleaseState(a),
       preview_port: getPreviewPort(a.id),
       api_port:     getApiPort(a.id) ?? a.api_port,
     };
   }));
 });
 
-app.post('/api/apps', (req, res) => {
+app.post('/api/apps', async (req, res) => {
   const user = getAuthUser(req);
   const guestKey = getGuestKey(req);
-  const { name = '新規アプリ', icon = '✨', description = '' } = req.body;
-  const r = db.prepare('INSERT INTO apps (owner_user_id, guest_key, name, icon, description) VALUES (?, ?, ?, ?, ?)')
-    .run(user?.id ?? null, user ? null : guestKey, name, icon, description);
-  const row = db.prepare('SELECT * FROM apps WHERE id = ?').get(r.lastInsertRowid);
-  const withLink = withPreviewLink(row);
-  res.json({ ...withLink, preview_port: null, api_port: null });
+  const { name = '新規アプリ', icon = '✨', description = '' } = req.body || {};
+  try {
+    const aiModelKey = await resolveSelectedModelKey(typeof req.body?.ai_model_key === 'string' ? req.body.ai_model_key : null);
+    const r = db.prepare('INSERT INTO apps (owner_user_id, guest_key, name, icon, description, ai_model_key) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(user?.id ?? null, user ? null : guestKey, name, icon, description, aiModelKey || null);
+    const row = db.prepare('SELECT * FROM apps WHERE id = ?').get(r.lastInsertRowid);
+    const withLink = withPreviewLink(row);
+    res.json({ ...withLink, preview_port: null, api_port: null });
+  } catch (e) {
+    res.status(500).json({ error: `create app failed: ${String(e?.message || e)}` });
+  }
 });
 
-app.get('/api/apps/:id', (req, res) => {
+app.get('/api/apps/:id', async (req, res) => {
   const row = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const user = getAuthUser(req);
   const guestKey = getGuestKey(req);
-  if (row.status !== 'published') {
+  const ownerMatch = !!(row.owner_user_id && user && row.owner_user_id === user.id);
+  const guestMatch = !!(!row.owner_user_id && row.guest_key && guestKey && row.guest_key === guestKey);
+  const releaseState = deriveReleaseState(row);
+  if (releaseState !== 'live') {
+    if (!ownerMatch && !guestMatch) {
+      return res.status(403).json({ error: 'アクセス権限がありません' });
+    }
+  }
+  ensureAppFilesMaterializedFromDb(Number(req.params.id));
+  syncAppVersionIndexFromFiles(Number(req.params.id));
+  const freshRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id) || row;
+  let previewPort = getPreviewPort(freshRow.id);
+  let apiPort = getApiPort(freshRow.id) ?? freshRow.api_port;
+  const shouldWakeWorkspaceRuntime = freshRow.runtime_mode !== 'server' && (releaseState !== 'live' || ownerMatch || guestMatch);
+  if (shouldWakeWorkspaceRuntime) {
+    try {
+      const runtime = await wakeAppRuntime(freshRow.id);
+      previewPort = runtime?.previewPort ?? getPreviewPort(freshRow.id);
+      apiPort = runtime?.apiPort ?? getApiPort(freshRow.id) ?? freshRow.api_port;
+    } catch (e) {
+      console.warn(`wake runtime on getApp failed for app ${freshRow.id}:`, e?.message || e);
+    }
+  }
+  touchAppAccess(freshRow.id);
+  const messages = db.prepare('SELECT * FROM messages WHERE app_id = ? ORDER BY created_at ASC').all(req.params.id);
+  const versionsRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC').all(req.params.id);
+  const versions = hydrateVersionRows(Number(req.params.id), versionsRaw);
+  const withLink = withPreviewLink(freshRow);
+  res.json({
+    ...withLink,
+    release_state: deriveReleaseState(freshRow),
+    messages,
+    versions,
+    preview_port: previewPort,
+    api_port: apiPort,
+  });
+});
+
+app.get('/api/workspace/:slug', (req, res) => {
+  const row = db.prepare('SELECT * FROM apps WHERE workspace_slug = ?').get(String(req.params.slug || ''));
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const user = getAuthUser(req);
+  const guestKey = getGuestKey(req);
+  if (deriveReleaseState(row) !== 'live') {
     const ownerMatch = !!(row.owner_user_id && user && row.owner_user_id === user.id);
     const guestMatch = !!(!row.owner_user_id && row.guest_key && guestKey && row.guest_key === guestKey);
     if (!ownerMatch && !guestMatch) {
       return res.status(403).json({ error: 'アクセス権限がありません' });
     }
   }
-  touchAppAccess(row.id);
-  const messages = db.prepare('SELECT * FROM messages WHERE app_id = ? ORDER BY created_at ASC').all(req.params.id);
-  const versions = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC').all(req.params.id);
   const withLink = withPreviewLink(row);
-  res.json({
-    ...withLink,
-    messages,
-    versions,
-    preview_port: getPreviewPort(row.id),
-    api_port:     getApiPort(row.id) ?? row.api_port,
-  });
+  return res.json({ ok: true, app: withLink });
 });
 
-app.patch('/api/apps/:id', requireAuth, (req, res) => {
+app.patch('/api/apps/:id', requireAuth, async (req, res) => {
   const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
   if (!appRow) return res.status(404).json({ error: 'Not found' });
   if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
 
   const { name, icon, description, status, color } = req.body;
-  if (status !== undefined && !['draft', 'private', 'published'].includes(status)) {
-    return res.status(400).json({ error: 'invalid status' });
+  if (status !== undefined && !['draft', 'private'].includes(status)) {
+    return res.status(400).json({ error: 'live release state must be set via publish flow' });
   }
-  const fields = [], values = [];
-  if (name        !== undefined) { fields.push('name = ?');        values.push(name); }
-  if (icon        !== undefined) { fields.push('icon = ?');        values.push(icon); }
-  if (description !== undefined) { fields.push('description = ?'); values.push(description); }
-  if (status      !== undefined) { fields.push('status = ?');      values.push(status); }
-  if (color       !== undefined) { fields.push('color = ?');       values.push(color); }
-  fields.push("updated_at = datetime('now')");
-  values.push(req.params.id);
-  db.prepare(`UPDATE apps SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-  const updated = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
-  const withLink = withPreviewLink(updated);
-  res.json({ ...withLink, preview_port: getPreviewPort(updated.id), api_port: getApiPort(updated.id) ?? updated.api_port });
+  try {
+    const fields = [], values = [];
+    if (name        !== undefined) { fields.push('name = ?');        values.push(name); }
+    if (icon        !== undefined) { fields.push('icon = ?');        values.push(icon); }
+    if (description !== undefined) { fields.push('description = ?'); values.push(description); }
+    if (status      !== undefined) {
+      fields.push('status = ?');
+      values.push(status);
+      fields.push('runtime_mode = ?');
+      values.push(status === 'draft' ? 'local' : 'server');
+      fields.push("review_status = 'none'");
+      fields.push("publish_status = 'idle'");
+      fields.push("app_stage = 'prototype'");
+      fields.push("stage_reason = 'manually moved back to draft/candidate state'");
+    }
+    if (color !== undefined) { fields.push('color = ?'); values.push(color); }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'ai_model_key')) {
+      const nextModelKey = await resolveSelectedModelKey(typeof req.body?.ai_model_key === 'string' ? req.body.ai_model_key : null);
+      fields.push('ai_model_key = ?');
+      values.push(nextModelKey || null);
+    }
+    fields.push("updated_at = datetime('now')");
+    values.push(req.params.id);
+    db.prepare(`UPDATE apps SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    const updated = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
+    const withLink = withPreviewLink(updated);
+    res.json({ ...withLink, preview_port: getPreviewPort(updated.id), api_port: getApiPort(updated.id) ?? updated.api_port });
+  } catch (e) {
+    res.status(500).json({ error: `update failed: ${String(e?.message || e)}` });
+  }
+});
+
+app.post('/api/apps/:id/publish', requireAuth, async (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  const mode = 'llm_provider';
+  const publishRoute = (() => {
+    const state = appRow?.release_state || deriveReleaseState(appRow);
+    if (state === 'failed') return 'failed_to_candidate';
+    if (state === 'rollback') return 'rollback_to_candidate';
+    if (state === 'live') return 'live_to_candidate';
+    return 'draft_to_candidate';
+  })();
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  if (isWorkspaceDraft(appRow) && !appRow.release_app_id) return res.status(400).json({ error: 'release link missing for workspace draft' });
+  if (deriveReleaseState(appRow) === 'candidate' || publishJobsInFlight.has(appId)) return res.status(409).json({ error: 'このアプリは現在公開処理中です' });
+
+  db.prepare("UPDATE apps SET publish_status='publishing', app_stage='frontend_ready', release_state='candidate', stage_reason='publish requested; waiting for release pipeline', updated_at=datetime('now') WHERE id = ?").run(appId);
+  startPublishJobRecord(appId);
+  savePublishJob(appId, { meta: { publishMode: mode, publish_route: publishRoute } });
+  processPublishJob(appId, appRow.name, { mode, modelKey: appRow.ai_model_key || null }).catch((e) => {
+    console.warn('publish background job failed:', e?.message || e);
+  });
+
+  return res.status(202).json(buildPublishStatusResponse(appId));
+});
+
+app.get('/api/apps/:id/publish-status', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  return res.json(buildPublishStatusResponse(appId));
+});
+
+app.post('/api/apps/:id/publish-cancel', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+
+  const status = buildPublishStatusResponse(appId);
+  const currentJob = getPublishJob(appId);
+  const isPublishing = deriveReleaseState(appRow) === 'candidate' || publishJobsInFlight.has(appId) || currentJob?.status === 'publishing';
+  if (!isPublishing) {
+    db.prepare("UPDATE apps SET publish_status='idle', app_stage='frontend_ready', stage_reason=NULL, updated_at=datetime('now') WHERE id = ?").run(appId);
+    savePublishJob(appId, {
+      status: 'cancelled',
+      current_step: currentJob?.current_step || 'cancelled',
+      current_phase: currentJob?.current_phase || 'cancelled',
+      failure_type: 'PUBLISH_CANCELLED',
+      retryable: false,
+      error_message: '发布已取消',
+      completed_at: new Date().toISOString(),
+      meta: {
+        cancel_requested: false,
+        cancel_completed: true,
+      },
+    });
+    clearPublishCancel(appId);
+    return res.json(buildPublishStatusResponse(appId));
+  }
+
+  requestPublishCancel(appId);
+  db.prepare("UPDATE apps SET stage_reason='取消发布中…', updated_at=datetime('now') WHERE id = ?").run(appId);
+  return res.status(202).json(buildPublishStatusResponse(appId));
+});
+
+app.post('/api/apps/:id/reset-failed-publish', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  if (deriveReleaseState(appRow) === 'candidate' || publishJobsInFlight.has(appId)) {
+    return res.status(409).json({ error: 'このアプリは現在公開処理中です' });
+  }
+
+  db.prepare("UPDATE apps SET publish_status='idle', app_stage='frontend_ready', release_state='draft', candidate_version_id=NULL, stage_reason='failed candidate state cleared for retry', updated_at=datetime('now') WHERE id = ?").run(appId);
+  clearPublishCancel(appId);
+  savePublishJob(appId, {
+    status: 'idle',
+    current_step: null,
+    current_phase: 'reset',
+    failure_type: null,
+    retryable: true,
+    error_message: null,
+    completed_at: new Date().toISOString(),
+    steps: [],
+    meta: {
+      reset_failed_publish: true,
+      previous_publish_status: appRow.publish_status || 'idle',
+      previous_app_stage: appRow.app_stage || null,
+    },
+  });
+  const updated = withPreviewLink(db.prepare('SELECT * FROM apps WHERE id = ?').get(appId));
+  return res.json({ ...updated, preview_port: getPreviewPort(appId), api_port: getApiPort(appId) ?? updated.api_port, publish_progress: getPublishJob(appId) || null });
+});
+
+app.post('/api/apps/:id/submit-review', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  if (!['live', 'rollback'].includes(deriveReleaseState(appRow))) return res.status(400).json({ error: '提審は Live / Rollback app のみ可能です' });
+  if (appRow.review_status === 'pending') return res.status(400).json({ error: 'このアプリはすでに提審中です' });
+
+  db.prepare("UPDATE apps SET review_status='pending', updated_at=datetime('now') WHERE id = ?").run(appId);
+  const updated = withPreviewLink(db.prepare('SELECT * FROM apps WHERE id = ?').get(appId));
+  res.json({ ...updated, release_state: deriveReleaseState(updated), preview_port: getPreviewPort(appId), api_port: null });
+});
+
+app.get('/api/apps/:id/clone-ready', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  const currentVersion = Number(appRow.current_version || 1);
+  try {
+    validateClonedAppFiles(appId, currentVersion);
+    return res.json({ ok: true, ready: true });
+  } catch (e) {
+    return res.json({ ok: true, ready: false, reason: String(e?.message || e) });
+  }
+});
+
+app.get('/api/apps/:id/files', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+
+  const rootDir = getAppDir(appId);
+  const maxDepth = 4;
+  const skipNames = new Set(['node_modules', '.git']);
+  function walk(dir, depth = 0, root = rootDir) {
+    const entries = fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : [];
+    return entries
+      .filter((entry) => !skipNames.has(entry.name))
+      .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+      .map((entry) => {
+        const full = path.join(dir, entry.name);
+        const rel = path.relative(root, full).replace(/\\/g, '/');
+        if (entry.isDirectory()) {
+          return {
+            name: entry.name,
+            path: rel,
+            type: 'dir',
+            children: depth >= maxDepth ? [] : walk(full, depth + 1, root),
+          };
+        }
+        const stat = fs.statSync(full);
+        return { name: entry.name, path: rel, type: 'file', size: stat.size };
+      });
+  }
+
+  return res.json({ root: rootDir, tree: walk(rootDir) });
+});
+
+app.get('/api/apps/:id/files/content', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+
+  const rel = String(req.query.path || '').replace(/^\/+/, '');
+  if (!rel) return res.status(400).json({ error: 'path required' });
+  const rootDir = getAppDir(appId);
+  const full = path.resolve(rootDir, rel);
+  if (!full.startsWith(path.resolve(rootDir) + path.sep) && full !== path.resolve(rootDir)) {
+    return res.status(400).json({ error: 'invalid path' });
+  }
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return res.status(404).json({ error: 'file not found' });
+  const stat = fs.statSync(full);
+  if (stat.size > 512000) return res.status(400).json({ error: 'file too large' });
+  const content = fs.readFileSync(full, 'utf8');
+  return res.json({ path: rel, content, size: stat.size });
+});
+
+app.post('/api/apps/:id/save-draft', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  if (!isWorkspaceDraft(appRow) || !appRow.release_app_id) {
+    return res.status(400).json({ error: 'linked workspace draft only' });
+  }
+
+  db.prepare("UPDATE apps SET status='draft', publish_status='idle', review_status='none', runtime_mode='local', app_stage='prototype', stage_reason='saved back to workspace draft', updated_at=datetime('now') WHERE id = ?").run(appId);
+  const updated = withPreviewLink(db.prepare('SELECT * FROM apps WHERE id = ?').get(appId));
+  return res.json({ ...updated, preview_port: getPreviewPort(appId), api_port: getApiPort(appId) ?? updated.api_port });
+});
+
+app.post('/api/apps/:id/runtime-mode', requireAuth, async (req, res) => {
+  const appId = Number(req.params.id);
+  const { mode } = req.body || {};
+  if (!['local', 'server'].includes(mode)) return res.status(400).json({ error: 'invalid mode' });
+
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+
+  db.prepare("UPDATE apps SET runtime_mode = ?, app_stage = ?, stage_reason = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(mode, mode === 'server' ? 'backend_verified' : 'frontend_ready', mode === 'server' ? 'runtime manually switched to server mode' : 'runtime manually switched to local mode', appId);
+
+  if (mode === 'local') {
+    stopAppBackend(appId);
+  } else {
+    await wakeAppRuntime(appId);
+  }
+
+  const updated = withPreviewLink(db.prepare('SELECT * FROM apps WHERE id = ?').get(appId));
+  res.json({ ...updated, preview_port: getPreviewPort(appId), api_port: getApiPort(appId) ?? updated.api_port });
 });
 
 app.delete('/api/apps/:id', requireAuth, (req, res) => {
@@ -958,7 +2755,7 @@ app.delete('/api/apps/:id', requireAuth, (req, res) => {
 
 app.post('/api/apps/:id/favorite', requireAuth, (req, res) => {
   const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
-  if (!appRow || appRow.status !== 'published') return res.status(404).json({ error: '公開アプリが見つかりません' });
+  if (!appRow || deriveReleaseState(appRow) !== 'live') return res.status(404).json({ error: 'Live アプリが見つかりません' });
   db.prepare('INSERT OR IGNORE INTO app_favorites (app_id, user_id) VALUES (?, ?)').run(req.params.id, req.user.id);
   res.json({ ok: true });
 });
@@ -971,7 +2768,7 @@ app.get('/api/apps/:id/backend-status', async (req, res) => {
 
   const runtime = getContainerRuntime(appId);
   const running = !!runtime?.running;
-  const reachable = !!runtime?.running;
+  const reachable = running ? await waitRuntimeReady({ appId, runtime }, 2, 250) : false;
   res.json({ ok: true, running, reachable, apiPort: null, runtime });
 });
 
@@ -981,30 +2778,239 @@ app.post('/api/apps/:id/backend-restart', async (req, res) => {
   if (!appRow) return res.status(404).json({ error: 'App not found' });
   if (!canAccessApp(appRow, req)) return res.status(403).json({ error: '編集権限がありません' });
 
-  const latest = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const latest = hydrateVersionRow(appId, latestRaw);
   if (!latest) return res.status(400).json({ error: 'No app version to restart' });
 
   let apiPort = null;
   const contract = injectMissingApiStubs(latest.code || '', latest.server_code || '');
-  const serverToUse = contract.code;
+  const normalizedServer = normalizeBackendSqlStrings(contract.code || '');
+  const serverToUse = normalizedServer.code || contract.code;
   const previewSlug = ensurePreviewSlug(appId);
   if (serverToUse && serverToUse.trim()) {
-    await deployAppBackend(appId, serverToUse, latest.sql_code || '', previewSlug);
+    await deployAppBackend(appId, serverToUse, latest.sql_code || '', previewSlug, { frontendCode: latest.code || '', dbMode: appRow.runtime_mode === 'server' ? 'prod' : 'dev' });
     db.prepare('UPDATE app_versions SET server_code = ? WHERE id = ?').run(serverToUse, latest.id);
   } else {
     stopAppBackend(appId);
     db.prepare('UPDATE apps SET api_port = NULL WHERE id = ?').run(appId);
   }
 
-  const apiBase = previewSlug ? `/app/${previewSlug}` : '';
-  const previewPort = startPreview(appId, latest.code || '', apiBase, previewSlug);
+  let previewPort = null;
+  if (appRow.runtime_mode !== 'server') {
+    previewPort = startPreview(appId, latest.code || '', '', previewSlug);
+  }
 
-  res.json({ ok: true, apiPort: null, previewPort: previewPort ?? null, previewSlug, previewPath: previewSlug ? `/app/${previewSlug}/` : null });
+  res.json({ ok: true, apiPort: null, previewPort: previewPort ?? null, previewSlug, previewPath: buildWorkspacePreviewPath(ensureWorkspaceSlug(appId)) });
+});
+
+app.get('/api/apps/:id/db-check', async (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'App not found' });
+  if (!canAccessApp(appRow, req)) return res.status(403).json({ error: '編集権限がありません' });
+
+  const appDir = path.join(__dirname, 'apps', String(appId));
+  const dbPath = path.join(appDir, 'data_prod.sqlite');
+  const schemaPath = path.join(appDir, 'schema.sql');
+  if (!fs.existsSync(schemaPath)) {
+    return res.status(400).json({ error: 'schema not found for this app' });
+  }
+
+  const schemaText = fs.readFileSync(schemaPath, 'utf8');
+  try {
+    const result = applySchemaToDbFile(dbPath, schemaText);
+    res.json({ ok: true, dbPath, ...result });
+  } catch (e) {
+    res.status(500).json({ error: `db-check failed: ${e.message}` });
+  }
+});
+
+app.get('/api/apps/:id/infrastructure/database', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const access = requireAppOwner(appId, req.user.id);
+  if (access.error) return res.status(access.status).json({ error: access.error });
+  ensureAppFilesMaterializedFromDb(appId);
+  try {
+    return res.json(listAppDatabaseTables(appId));
+  } catch (e) {
+    return res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+app.get('/api/apps/:id/infrastructure/database/table/:table', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const access = requireAppOwner(appId, req.user.id);
+  if (access.error) return res.status(access.status).json({ error: access.error });
+  const table = String(req.params.table || '');
+  const dbPath = getAppDbPath(appId);
+  if (!fs.existsSync(dbPath)) return res.json({ table, columns: [], rows: [], limit: 20, offset: 0, total: 0 });
+  const sqlite = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 200);
+    const offset = Math.max(Number(req.query.offset || 0), 0);
+    const safeTable = quoteSqliteIdentifier(table);
+    const columns = sqlite.prepare(`PRAGMA table_info(${safeTable})`).all().map(c => c.name);
+    const rows = sqlite.prepare(`SELECT * FROM ${safeTable} LIMIT ? OFFSET ?`).all(limit, offset);
+    let total = null;
+    try { total = Number(sqlite.prepare(`SELECT COUNT(*) as c FROM ${safeTable}`).get().c || 0); } catch {}
+    return res.json({ table, columns, rows, limit, offset, total });
+  } catch (e) {
+    return res.status(400).json({ error: String(e?.message || e) });
+  } finally {
+    try { sqlite.close(); } catch {}
+  }
+});
+
+app.post('/api/apps/:id/infrastructure/database/query', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const access = requireAppOwner(appId, req.user.id);
+  if (access.error) return res.status(access.status).json({ error: access.error });
+  const sql = String(req.body?.sql || '').trim();
+  if (!sql) return res.status(400).json({ error: 'sql is required' });
+  const dbPath = getAppDbPath(appId);
+  const schemaPath = getAppSchemaPath(appId);
+  if (!fs.existsSync(dbPath) && fs.existsSync(schemaPath)) {
+    try {
+      applySchemaToDbFile(dbPath, fs.readFileSync(schemaPath, 'utf8'));
+    } catch {}
+  }
+  const sqlite = new BetterSqlite3(dbPath);
+  try {
+    const lower = sql.toLowerCase();
+    const isRead = /^(select|pragma|with|explain)/.test(lower);
+    if (isRead) {
+      const stmt = sqlite.prepare(sql);
+      const rows = stmt.all();
+      const columns = rows[0] ? Object.keys(rows[0]) : (typeof stmt.columns === 'function' ? stmt.columns().map(c => c.name) : []);
+      return res.json({ mode: 'read', columns, rows, rowCount: rows.length, message: `已返回 ${rows.length} 行` });
+    }
+    const result = sqlite.prepare(sql).run();
+    return res.json({ mode: 'write', changes: result.changes || 0, message: 'SQL 执行完成' });
+  } catch (e) {
+    return res.status(400).json({ error: String(e?.message || e) });
+  } finally {
+    try { sqlite.close(); } catch {}
+  }
+});
+
+app.get('/api/apps/:id/infrastructure/analytics', requireAuth, (req, res) => {
+  const appId = Number(req.params.id);
+  const access = requireAppOwner(appId, req.user.id);
+  if (access.error) return res.status(access.status).json({ error: access.error });
+  const range = ['day', 'week', 'month'].includes(String(req.query.range || 'day')) ? String(req.query.range) : 'day';
+  return res.json(getAppAnalytics(appId, range));
 });
 
 app.delete('/api/apps/:id/favorite', requireAuth, (req, res) => {
   db.prepare('DELETE FROM app_favorites WHERE app_id = ? AND user_id = ?').run(req.params.id, req.user.id);
   res.json({ ok: true });
+});
+
+app.get('/api/apps/:id/contract-shape-check', async (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'App not found' });
+  if (!canAccessApp(appRow, req)) return res.status(403).json({ error: '編集権限がありません' });
+
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const latest = hydrateVersionRow(appId, latestRaw);
+  const contracts = extractFrontendApiContracts(latest?.code || '');
+  const checks = contracts.map(c => ({ method: c.method, path: c.path, expect: c.expect, ok: true }));
+  const missing = checks.filter(c => !extractBackendApiContracts(latest?.server_code || '').has(`${c.method} ${c.path}`));
+  for (const m of missing) m.ok = false;
+  const passed = checks.every(c => c.ok);
+  res.json({ ok: true, passed, checks, missingCount: missing.length });
+});
+
+app.get('/api/apps/:id/verifier-report', async (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'App not found' });
+  if (!canAccessApp(appRow, req)) return res.status(403).json({ error: '編集権限がありません' });
+
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const report = await verifyAppRelease(appId, latestRaw, {
+    expectedDbMode: (appRow.release_state || deriveReleaseState(appRow)) === 'live' || appRow.runtime_mode === 'server' ? 'prod' : 'prod',
+  });
+  res.json({ ok: true, report });
+});
+
+app.post('/api/apps/:id/release-repair', requireAuth, async (req, res) => {
+  const appId = Number(req.params.id);
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'App not found' });
+  if (appRow.owner_user_id !== req.user.id) return res.status(403).json({ error: '編集権限がありません' });
+  const selectedModelKey = await resolveSelectedModelKey(appRow.ai_model_key || null);
+  const callLlmForApp = (messages) => callLlmOnce(messages, { modelKey: selectedModelKey });
+
+  const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+  const latest = hydrateVersionRow(appId, latestRaw);
+  if (!latest?.code) return res.status(400).json({ error: 'No release artifacts to repair' });
+
+  const initialReport = await verifyAppRelease(appId, latest, { expectedDbMode: 'prod' });
+  if (initialReport.ok) {
+    setAppStage(appId, 'backend_verified', 'verifier already passes; no repair needed');
+    return res.json({ ok: true, repaired: false, report: initialReport, message: 'verifier already passes' });
+  }
+
+  setAppStage(appId, 'repair_needed', initialReport.summary || 'manual failed-state repair requested');
+  const findings = initialReport.blockingFailures.map(item => ({ code: item.checkId || item.type || 'UNKNOWN', message: `${item.label}: ${item.detail}` }));
+  const repairPrompt = `${buildFailureContextRepairPrompt(findings)}
+
+Release frontend JSX:
+\`\`\`jsx
+${latest.code}
+\`\`\`
+
+Current backend:
+\`\`\`javascript server
+${latest.server_code || ''}
+\`\`\`
+
+Current SQL:
+\`\`\`sql
+${latest.sql_code || ''}
+\`\`\``;
+  const repairSystemPrompt = buildRepairSystemPrompt({
+    requestedMode: 'edit',
+    runtimeMode: appRow.runtime_mode || 'server',
+    appStatus: appRow.status,
+    appRow,
+    userId: req.user.id,
+    appId,
+  });
+  const repaired = await callLlmForApp([
+    { role: 'system', content: repairSystemPrompt },
+    { role: 'user', content: repairPrompt },
+  ]);
+  const parsed = parseAIResponse(repaired);
+  let serverCode = parsed.server?.trim() || latest.server_code || '';
+  let sqlCode = parsed.sql?.trim() || latest.sql_code || '';
+  serverCode = injectMissingApiStubs(latest.code || '', serverCode).code || serverCode;
+  serverCode = normalizeBackendSqlStrings(serverCode || '').code || serverCode;
+
+  validateServerCodeSyntax(appId, serverCode || '');
+  validatePublishSchemaSafety(appId, sqlCode || '');
+  const previewSlug = ensurePreviewSlug(appId);
+  const apiPort = await deployAppBackend(appId, serverCode || '', sqlCode || '', previewSlug, { dbMode: 'prod' });
+  if (apiPort) db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(apiPort, appId);
+  db.prepare('UPDATE app_versions SET server_code = ?, sql_code = ? WHERE id = ?').run(serverCode || null, sqlCode || null, latest.id);
+  writeVersionFiles(appId, latest.version_number, latest.code || '', serverCode || '', sqlCode || '');
+
+  const finalReport = await verifyAppRelease(appId, {
+    ...latest,
+    server_code: serverCode,
+    sql_code: sqlCode,
+  }, { expectedDbMode: 'prod' });
+
+  if (!finalReport.ok) {
+    appendAppFailures(appId, `\n## ${new Date().toISOString()} release repair failed\n- summary: ${finalReport.summary || 'failed-state repair failed'}\n- findings:\n${(finalReport.blockingFailures || []).map(item => `  - ${item.label || item.checkId || item.type || 'UNKNOWN'}: ${item.detail || ''}`).join('\n')}\n`);
+    setAppStage(appId, 'release_blocked', finalReport.summary || 'manual failed-state repair failed');
+    return res.status(422).json({ ok: false, repaired: false, report: finalReport, error: finalReport.summary || 'failed-state repair failed' });
+  }
+
+  setAppStage(appId, 'backend_verified', finalReport.summary || 'manual release repair succeeded');
+  res.json({ ok: true, repaired: true, report: finalReport, serverCode, sqlCode });
 });
 
 app.get('/api/apps/:id/qa-check', async (req, res) => {
@@ -1019,7 +3025,8 @@ app.get('/api/apps/:id/qa-check', async (req, res) => {
     checks.push({ name: 'runtime_wake', ok: !!w.previewPort, detail: w.previewPort ? 'preview running' : 'preview missing' });
 
     const slug = ensurePreviewSlug(appId);
-    const previewUrl = `http://127.0.0.1:${PORT}/app/${slug}/`;
+    const previewPath = buildWorkspacePreviewPath(ensureWorkspaceSlug(appId));
+    const previewUrl = `http://127.0.0.1:${PORT}${previewPath}/`;
     try {
       const pr = await fetch(previewUrl);
       checks.push({ name: 'preview_page', ok: pr.ok, detail: `status=${pr.status}` });
@@ -1027,7 +3034,8 @@ app.get('/api/apps/:id/qa-check', async (req, res) => {
       checks.push({ name: 'preview_page', ok: false, detail: String(e?.message || e) });
     }
 
-    const latest = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+    const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+    const latest = hydrateVersionRow(appId, latestRaw);
     const contracts = extractFrontendApiContracts(latest?.code || '');
     const uniqueGet = [];
     const seen = new Set();
@@ -1075,10 +3083,26 @@ app.get('/api/apps/:id/qa-check', async (req, res) => {
       checks.push({ name: 'api_probe', ok: true, detail: 'no stable GET contract to probe; skipped' });
     }
 
-    const required = checks.filter(c => c.name === 'runtime_wake' || c.name === 'preview_page' || c.name.startsWith('api_'));
+    const browserSmoke = await runBrowserSmoke(previewUrl, {
+      budgetMs: 9000,
+      settleMs: 1000,
+      actionDelayMs: 700,
+    });
+    const browserBlocking = Array.isArray(browserSmoke?.blockingFailures) ? browserSmoke.blockingFailures : [];
+    checks.push({
+      name: 'browser_smoke',
+      ok: !!browserSmoke?.ok,
+      detail: browserSmoke?.ok
+        ? 'browser smoke passed'
+        : (browserBlocking.length
+            ? browserBlocking.map(item => `${item.label}: ${item.detail}`).join(' | ')
+            : (browserSmoke?.summary || 'browser smoke failed')),
+    });
+
+    const required = checks.filter(c => c.name === 'runtime_wake' || c.name === 'preview_page' || c.name.startsWith('api_') || c.name === 'browser_smoke');
     const passed = required.every(c => c.ok);
     const summary = passed ? 'QA passed' : 'QA failed';
-    res.json({ ok: true, passed, summary, checks });
+    res.json({ ok: true, passed, summary, checks, browserSmoke, previewPath, previewUrl });
   } catch (e) {
     res.status(500).json({ error: `qa-check failed: ${e.message}` });
   }
@@ -1101,10 +3125,77 @@ app.post('/api/admin/logout', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/admin/ai/config', requireAdmin, async (_req, res) => {
+  try {
+    res.json(await getAdminAiConfig());
+  } catch (e) {
+    res.status(500).json({ error: `admin ai config failed: ${String(e?.message || e)}` });
+  }
+});
+
+app.post('/api/admin/ai/providers/openai-codex/oauth/start', requireAdmin, async (_req, res) => {
+  try {
+    res.json(await startOpenAICodexOAuthSession());
+  } catch (e) {
+    res.status(500).json({ error: `codex oauth start failed: ${String(e?.message || e)}` });
+  }
+});
+
+app.get('/api/admin/ai/providers/openai-codex/oauth/:sessionId', requireAdmin, (req, res) => {
+  const session = getOpenAICodexOAuthSession(req.params.sessionId);
+  if (!session) return res.status(404).json({ error: 'oauth session not found' });
+  res.json(session);
+});
+
+app.post('/api/admin/ai/providers/openai-codex/oauth/:sessionId/manual-code', requireAdmin, (req, res) => {
+  try {
+    const session = submitOpenAICodexOAuthManualInput(req.params.sessionId, req.body?.input || req.body?.code || '');
+    res.json(session);
+  } catch (e) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/admin/ai/providers/anthropic', requireAdmin, async (req, res) => {
+  try {
+    res.json(await saveAnthropicProvider(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/admin/ai/default-model', requireAdmin, async (req, res) => {
+  try {
+    res.json(await updatePlatformDefaultModel(req.body?.modelKey || ''));
+  } catch (e) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post('/api/admin/ai/providers/:providerId/models', requireAdmin, async (req, res) => {
+  try {
+    res.json(await updatePlatformProviderModels(req.params.providerId, req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
+app.delete('/api/admin/ai/providers/:providerId', requireAdmin, async (req, res) => {
+  try {
+    res.json(await disconnectPlatformProvider(req.params.providerId));
+  } catch (e) {
+    res.status(400).json({ error: String(e?.message || e) });
+  }
+});
+
 app.get('/api/admin/stats', requireAdmin, (req, res) => {
   const users = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
   const apps = db.prepare('SELECT COUNT(*) as c FROM apps').get().c;
-  const pending = db.prepare("SELECT COUNT(*) as c FROM apps WHERE status = 'private'").get().c;
+  const pending = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM apps
+    WHERE review_status = 'pending' OR release_state = 'candidate'
+  `).get().c;
   res.json({ users, apps, pending });
 });
 
@@ -1132,24 +3223,249 @@ app.get('/api/admin/users/:id', requireAdmin, (req, res) => {
 
 app.get('/api/admin/apps/review', requireAdmin, (req, res) => {
   const rows = db.prepare(`
-    SELECT a.id, a.name, a.icon, a.description, a.status, a.updated_at,
+    SELECT a.id, a.name, a.icon, a.description, a.status, a.review_status, a.release_state, a.updated_at,
+      a.live_version_id, a.candidate_version_id, a.last_failure_reason, a.last_failure_at, a.last_promoted_at,
+      (
+        SELECT MAX(arb.backup_version_number)
+        FROM app_release_backups arb
+        WHERE arb.release_app_id = a.id
+      ) as latest_backup_version,
+      (
+        SELECT COUNT(*)
+        FROM app_release_backups arb
+        WHERE arb.release_app_id = a.id
+      ) as backup_count,
       u.id as owner_id, u.email as owner_email, u.nickname as owner_nickname
     FROM apps a
     LEFT JOIN users u ON a.owner_user_id = u.id
-    WHERE a.status = 'private' OR a.status = 'published'
+    WHERE a.review_status = 'pending' OR a.release_state IN ('live','rollback','candidate','failed')
     ORDER BY a.updated_at DESC
   `).all();
   res.json(rows);
 });
+
+app.get('/api/admin/apps/:id/memory', requireAdmin, (req, res) => {
+  const appId = Number(req.params.id);
+  const row = db.prepare('SELECT id FROM apps WHERE id = ?').get(appId);
+  if (!row) return res.status(404).json({ error: 'app not found' });
+  const dir = ensureAppMemoryFiles(appId);
+  const read = (name) => {
+    try {
+      const p = path.join(dir, name);
+      if (!fs.existsSync(p)) return { text: '', mtime: null };
+      return { text: fs.readFileSync(p, 'utf8'), mtime: fs.statSync(p).mtime.toISOString() };
+    } catch {
+      return { text: '', mtime: null };
+    }
+  };
+  const memory = read('MEMORY.md');
+  const decisions = read('DECISIONS.md');
+  const releaseNotes = read('RELEASE_NOTES.md');
+  res.json({
+    appId,
+    memory: memory.text,
+    decisions: decisions.text,
+    releaseNotes: releaseNotes.text,
+    updatedAt: {
+      memory: memory.mtime,
+      decisions: decisions.mtime,
+      releaseNotes: releaseNotes.mtime,
+    },
+  });
+});
+
+function applyAdminReleaseTransition(appId, transition) {
+  const mapping = {
+    candidate_to_live: {
+      status: 'published',
+      reviewStatus: 'approved',
+      publishStatus: 'idle',
+      runtimeMode: 'server',
+      releaseState: 'live',
+      setLastPromotedAt: true,
+      clearCandidateVersion: true,
+      keepLiveVersion: true,
+    },
+    rollback_to_live: {
+      status: 'published',
+      reviewStatus: 'approved',
+      publishStatus: 'idle',
+      runtimeMode: 'server',
+      releaseState: 'live',
+      setLastPromotedAt: true,
+      clearCandidateVersion: true,
+      keepLiveVersion: true,
+    },
+    failed_to_draft: {
+      status: 'draft',
+      reviewStatus: 'none',
+      publishStatus: 'idle',
+      runtimeMode: 'local',
+      releaseState: 'draft',
+      setLastPromotedAt: false,
+      clearCandidateVersion: true,
+      keepLiveVersion: true,
+    },
+    live_to_draft: {
+      status: 'draft',
+      reviewStatus: 'none',
+      publishStatus: 'idle',
+      runtimeMode: 'local',
+      releaseState: 'draft',
+      setLastPromotedAt: false,
+      clearCandidateVersion: true,
+      keepLiveVersion: false,
+    },
+  };
+  const next = mapping[transition];
+  if (!next) throw new Error(`unknown admin release transition: ${transition}`);
+  db.prepare(`
+    UPDATE apps
+    SET
+      status = ?,
+      review_status = ?,
+      publish_status = ?,
+      runtime_mode = ?,
+      release_state = ?,
+      candidate_version_id = CASE WHEN ? THEN NULL ELSE candidate_version_id END,
+      live_version_id = CASE WHEN ? THEN live_version_id ELSE NULL END,
+      last_promoted_at = CASE WHEN ? THEN datetime('now') ELSE last_promoted_at END,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    next.status,
+    next.reviewStatus,
+    next.publishStatus,
+    next.runtimeMode,
+    next.releaseState,
+    next.clearCandidateVersion ? 1 : 0,
+    next.keepLiveVersion ? 1 : 0,
+    next.setLastPromotedAt ? 1 : 0,
+    appId,
+  );
+  return db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+}
 
 app.patch('/api/admin/apps/:id/status', requireAdmin, (req, res) => {
   const { status } = req.body || {};
   if (!['draft', 'private', 'published'].includes(status)) return res.status(400).json({ error: 'invalid status' });
   const row = db.prepare('SELECT id FROM apps WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'app not found' });
-  db.prepare("UPDATE apps SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, req.params.id);
-  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
+  const appRow = status === 'published'
+    ? applyAdminReleaseTransition(Number(req.params.id), 'candidate_to_live')
+    : applyAdminReleaseTransition(Number(req.params.id), 'live_to_draft');
   res.json(appRow);
+});
+
+app.post('/api/admin/apps/:id/action', requireAdmin, (req, res) => {
+  const appId = Number(req.params.id);
+  const { action } = req.body || {};
+  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  if (!appRow) return res.status(404).json({ error: 'app not found' });
+
+  const getBackupSummary = () => {
+    const backupCount = Number(db.prepare('SELECT COUNT(*) as c FROM app_release_backups WHERE release_app_id = ?').get(appId)?.c || 0);
+    return {
+      backupCount,
+      rollbackAvailable: backupCount > 0,
+    };
+  };
+
+  const applyAdminSemanticState = ({ status, reviewStatus, publishStatus = 'idle', runtimeMode, releaseState }) => {
+    db.prepare(`
+      UPDATE apps
+      SET status = ?, review_status = ?, publish_status = ?, runtime_mode = ?, release_state = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(status, reviewStatus, publishStatus, runtimeMode, releaseState, appId);
+    return db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
+  };
+
+  const beforeReleaseState = appRow.release_state || deriveReleaseState(appRow);
+  let updated = null;
+  let summary = '';
+  switch (action) {
+    case 'promote_candidate_to_live':
+    case 'mark_live':
+      updated = applyAdminReleaseTransition(appId, 'candidate_to_live');
+      summary = `App #${appId} promoted candidate to live release state`;
+      break;
+    case 'revert_to_draft':
+    case 'send_to_draft':
+      updated = applyAdminReleaseTransition(appId, 'live_to_draft');
+      summary = `App #${appId} reverted live release to draft workspace state`;
+      break;
+    case 'promote_rollback_to_live':
+    case 'recover_rollback_to_live':
+      updated = applyAdminReleaseTransition(appId, 'rollback_to_live');
+      summary = `App #${appId} promoted rollback runtime back to live`;
+      break;
+    case 'clear_failed_candidate':
+      updated = applyAdminReleaseTransition(appId, 'failed_to_draft');
+      summary = `App #${appId} cleared failed candidate back to draft`;
+      break;
+    default:
+      return res.status(400).json({ error: 'invalid admin action' });
+  }
+
+  const backupSummary = getBackupSummary();
+  const afterReleaseState = updated?.release_state || deriveReleaseState(updated);
+  res.json({
+    ok: true,
+    action,
+    summary,
+    release: {
+      before_release_state: beforeReleaseState,
+      after_release_state: afterReleaseState,
+      live_version_id: updated?.live_version_id ?? null,
+      candidate_version_id: updated?.candidate_version_id ?? null,
+      backup_count: backupSummary.backupCount,
+      rollback_available: backupSummary.rollbackAvailable,
+      last_promoted_at: updated?.last_promoted_at || null,
+    },
+    app: updated,
+  });
+});
+
+app.get('/api/admin/cleanup/invalid-release-drafts', requireAdmin, (_req, res) => {
+  try {
+    const drafts = listInvalidReleaseDrafts();
+    res.json({ ok: true, drafts, count: drafts.length });
+  } catch (e) {
+    console.error('list invalid release drafts failed:', e?.message || e);
+    res.status(500).json({ error: 'list cleanup targets failed' });
+  }
+});
+
+app.post('/api/admin/cleanup/invalid-release-drafts', requireAdmin, (req, res) => {
+  try {
+    const result = cleanupInvalidReleaseDrafts();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('cleanup invalid release drafts failed:', e?.message || e);
+    res.status(500).json({ error: 'cleanup failed' });
+  }
+});
+
+app.get('/api/admin/cleanup/orphan-app-resources', requireAdmin, (_req, res) => {
+  try {
+    const items = listOrphanAppResources();
+    const totalBytes = items.reduce((sum, item) => sum + Number(item.size_bytes || 0), 0);
+    res.json({ ok: true, items, count: items.length, totalBytes, totalMb: Number((totalBytes / 1024 / 1024).toFixed(2)) });
+  } catch (e) {
+    console.error('list orphan app resources failed:', e?.message || e);
+    res.status(500).json({ error: 'list orphan resources failed' });
+  }
+});
+
+app.post('/api/admin/cleanup/orphan-app-resources', requireAdmin, (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const result = cleanupOrphanAppResources(ids);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('cleanup orphan app resources failed:', e?.message || e);
+    res.status(500).json({ error: 'cleanup orphan resources failed' });
+  }
 });
 
 app.delete('/api/admin/apps/:id', requireAdmin, (req, res) => {
@@ -1157,20 +3473,18 @@ app.delete('/api/admin/apps/:id', requireAdmin, (req, res) => {
   const row = db.prepare('SELECT id FROM apps WHERE id = ?').get(appId);
   if (!row) return res.status(404).json({ error: 'app not found' });
 
-  stopPreview(appId);
-  stopAppBackend(appId);
-
-  db.prepare('DELETE FROM app_favorites WHERE app_id = ?').run(appId);
-  db.prepare('DELETE FROM messages WHERE app_id = ?').run(appId);
-  db.prepare('DELETE FROM app_versions WHERE app_id = ?').run(appId);
-  db.prepare('DELETE FROM apps WHERE id = ?').run(appId);
-
-  res.json({ ok: true });
+  try {
+    const deletedIds = deleteAppDeep(appId);
+    res.json({ ok: true, deletedIds, count: deletedIds.length });
+  } catch (e) {
+    console.error('admin delete app failed:', e?.message || e);
+    res.status(500).json({ error: 'delete app failed' });
+  }
 });
 
 app.get('/api/admin/runtimes', requireAdmin, async (_req, res) => {
   const rows = db.prepare(`
-    SELECT a.id, a.name, a.icon, a.status, a.preview_slug, a.last_access_at, a.updated_at,
+    SELECT a.id, a.name, a.icon, a.status, a.runtime_mode, a.preview_slug, a.last_access_at, a.updated_at,
            u.email as owner_email
     FROM apps a
     LEFT JOIN users u ON a.owner_user_id = u.id
@@ -1185,11 +3499,13 @@ app.get('/api/admin/runtimes', requireAdmin, async (_req, res) => {
     const previewRunning = !!previewPort;
 
     let healthOk = false;
-    if (backendRunning && runtime?.ip) {
-      try {
-        const hr = await fetch(`http://${runtime.ip}:3001/health`);
-        healthOk = hr.ok;
-      } catch {}
+    let healthFrontend = false;
+    let healthDbMode = null;
+    const healthPayload = backendRunning ? await fetchRuntimeHealth(runtime) : null;
+    if (healthPayload) {
+      healthOk = !!healthPayload.ok;
+      healthFrontend = !!healthPayload.frontend;
+      healthDbMode = healthPayload.dbMode || null;
     }
 
     const inflight = autoFixInFlight.has(r.id);
@@ -1200,14 +3516,25 @@ app.get('/api/admin/runtimes', requireAdmin, async (_req, res) => {
       ...r,
       preview_port: previewPort || null,
       api_port: null,
+      runtime_mode: r.runtime_mode || 'local',
+      release_state: deriveReleaseState(r),
+      live_version_id: r.live_version_id ?? null,
+      candidate_version_id: r.candidate_version_id ?? null,
+      last_failure_reason: r.last_failure_reason ?? null,
+      last_failure_at: r.last_failure_at ?? null,
+      dockerized: backendRunning,
       backend_state: backendRunning ? 'running' : 'sleeping',
       preview_state: previewRunning ? 'running' : 'sleeping',
+      frontend_state: healthFrontend ? 'running' : 'sleeping',
       runtime_state: backendRunning ? 'running' : 'sleeping',
       runtime_container: runtime?.containerName || null,
       health_ok: healthOk,
+      health_frontend: healthFrontend,
+      health_db_mode: healthDbMode,
       autofix_inflight: inflight,
       autofix_cooldown_sec: cooldownSec,
-      preview_path: r.preview_slug ? `/app/${r.preview_slug}/` : null,
+      preview_path: buildWorkspacePreviewPath(r.workspace_slug || ensureWorkspaceSlug(r.id)),
+      public_path: buildWorkspacePublicPath(r.workspace_slug || ensureWorkspaceSlug(r.id)),
     });
   }
   res.json(out);
@@ -1240,140 +3567,189 @@ app.post('/api/admin/runtimes/:id/sleep', requireAdmin, async (req, res) => {
   res.json({ ok: true, appId, runtimeRunning: !!runtime?.running });
 });
 
-app.post('/api/apps/plan', async (req, res) => {
-  const { prompt = '' } = req.body || {};
-  if (!String(prompt).trim()) return res.status(400).json({ error: 'prompt が必要です' });
-
-  const plannerPrompt = `You are a senior product manager for AI app generation.\nReturn ONLY JSON with this schema:\n{\n  "steps": ["detailed Japanese step", ... 7-10 items],\n  "questionnaire": [\n    {"id":"layout","title":"Japanese title","options":["A","B","C"]},\n    ... 4-6 items total\n  ]\n}\nRules:\n- Japanese text only\n- Steps must be practical and specific (data model, API scope, edge cases, permission, rollout)\n- Each step should be 18-45 Japanese chars, actionable not generic\n- options must be choice-based (no free input)\n- ids use lowercase ascii\n- no markdown, no explanation`; 
-
+app.post('/api/apps/:id/ensure-workspace-draft', requireAuth, async (req, res) => {
   try {
-    const raw = await callOpenClawOnce([
-      { role: 'system', content: plannerPrompt },
-      { role: 'user', content: String(prompt) },
-    ]);
-    let jsonText = raw.trim();
-    const m = jsonText.match(/\{[\s\S]*\}/);
-    if (m) jsonText = m[0];
-    const data = parseJsonRelaxed(jsonText);
-    const steps = Array.isArray(data?.steps) ? data.steps.map(s => String(s)).filter(Boolean).slice(0, 10) : DEFAULT_PLAN_STEPS;
-    const questionnaire = Array.isArray(data?.questionnaire) && data.questionnaire.length > 0
-      ? data.questionnaire
-          .map(q => ({ id: String(q?.id || ''), title: String(q?.title || ''), options: Array.isArray(q?.options) ? q.options.map(o => String(o)).filter(Boolean).slice(0, 6) : [] }))
-          .filter(q => q.id && q.title && q.options.length >= 2)
-          .slice(0, 6)
-      : DEFAULT_PLAN_QUESTIONNAIRE;
-    res.json({ steps, questionnaire });
-  } catch (e) {
-    // OpenClaw 超时等仍返回默认策划，避免整条流程报错
-    res.json({
-      steps: DEFAULT_PLAN_STEPS,
-      questionnaire: DEFAULT_PLAN_QUESTIONNAIRE,
-    });
-  }
-});
+    const sourceAppId = Number(req.params.id);
+    const source = db.prepare('SELECT * FROM apps WHERE id = ?').get(sourceAppId);
+    if (!source) return res.status(404).json({ error: 'App not found' });
 
-app.post('/api/apps/design-brief', async (req, res) => {
-  const prompt = String(req.body?.prompt || '').trim();
-  const paradigm = String(req.body?.paradigm || '').trim();
-  if (!prompt) return res.status(400).json({ error: 'prompt が必要です' });
+    const releaseAppId = getEffectiveReleaseAppId(source);
+    const releaseRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(releaseAppId);
+    if (!releaseRow || deriveReleaseState(releaseRow) !== 'live') {
+      return res.status(400).json({ error: 'Live リリースからのみワークスペース下書きを作成できます' });
+    }
 
-  const designPrompt = `You are a senior UI designer.
-Return ONLY JSON:
-{
-  "concept": "short Japanese concept",
-  "styleGuide": ["6-10 concrete Japanese bullets"],
-  "uiChecklist": ["6-10 concrete Japanese checklist items"]
-}
-Rules:
-- Japanese text only
-- Must include explicit color strategy (primary/secondary/background/state colors)
-- Must include typography hierarchy and spacing rhythm guidance
-- Must include component-level guidance (card/button/table/form)
-- Focus on concrete, implementable guidance for the selected paradigm
-- No markdown, no explanation`;
-
-  try {
-    const raw = await callOpenClawOnce([
-      { role: 'system', content: designPrompt },
-      { role: 'user', content: `要件: ${prompt}\n選択范式: ${paradigm || '未指定'}` },
-    ]);
-    let jsonText = raw.trim();
-    const m = jsonText.match(/\{[\s\S]*\}/);
-    if (m) jsonText = m[0];
-    const d = parseJsonRelaxed(jsonText);
-    res.json({
-      concept: String(d?.concept || '').trim() || DEFAULT_DESIGN_CONCEPT,
-      styleGuide: Array.isArray(d?.styleGuide) && d.styleGuide.length > 0
-        ? d.styleGuide.map(x => String(x)).filter(Boolean).slice(0, 10)
-        : DEFAULT_DESIGN_STYLE_GUIDE,
-      uiChecklist: Array.isArray(d?.uiChecklist) && d.uiChecklist.length > 0
-        ? d.uiChecklist.map(x => String(x)).filter(Boolean).slice(0, 10)
-        : DEFAULT_DESIGN_UI_CHECKLIST,
+    const result = await ensureWorkspaceDraftFromRelease(releaseAppId, req.user.id);
+    const draftRow = result.app;
+    return res.json({
+      ...withPreviewLink(draftRow),
+      clone_ready: true,
+      created_workspace_draft: result.created,
+      release_app_id: releaseAppId,
+      preview_port: getPreviewPort(draftRow.id),
+      api_port: getApiPort(draftRow.id) ?? draftRow.api_port,
     });
   } catch (e) {
-    // OpenClaw 超时/网络错误或 JSON 解析失败时返回默认设计概要，流程可继续
-    res.json({
-      concept: DEFAULT_DESIGN_CONCEPT,
-      styleGuide: DEFAULT_DESIGN_STYLE_GUIDE,
-      uiChecklist: DEFAULT_DESIGN_UI_CHECKLIST,
-    });
+    console.error('ensure workspace draft failed:', e?.message || e);
+    return res.status(500).json({ error: `workspace draft failed: ${String(e?.message || e)}` });
   }
 });
 
 app.post('/api/apps/:id/clone', requireAuth, async (req, res) => {
   const source = db.prepare('SELECT * FROM apps WHERE id = ?').get(req.params.id);
-  if (!source || source.status !== 'published') return res.status(404).json({ error: '公開アプリが見つかりません' });
+  if (!source || (source.release_state || deriveReleaseState(source)) !== 'live') return res.status(404).json({ error: 'Live App が見つかりません' });
 
-  const r = db.prepare(
-    "INSERT INTO apps (owner_user_id, name, icon, description, status, current_version, color) VALUES (?, ?, ?, ?, 'draft', 1, ?)"
-  ).run(req.user.id, `${source.name}（コピー）`, source.icon, source.description || '', source.color || null);
+  let newAppId = null;
+  let lastVersion = 1;
+  try {
+    const tx = db.transaction(() => {
+      const r = db.prepare(
+        "INSERT INTO apps (owner_user_id, name, icon, description, status, app_role, release_app_id, current_version, color, runtime_mode, ai_model_key) VALUES (?, ?, ?, ?, 'draft', 'draft', ?, ?, ?, 'local', ?)"
+      ).run(req.user.id, `${source.name}（ワークスペース）`, source.icon, source.description || '', source.id, Number(source.current_version || 1), source.color || null, source.ai_model_key || null);
 
-  const newAppId = r.lastInsertRowid;
-  const versions = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number ASC').all(source.id);
-  for (const v of versions) {
-    db.prepare(
-      'INSERT INTO app_versions (app_id, version_number, label, code, server_code, sql_code) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(newAppId, v.version_number, v.label, v.code, v.server_code, v.sql_code);
+      newAppId = Number(r.lastInsertRowid);
+      const versionsRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number ASC').all(source.id);
+      const versions = hydrateVersionRows(source.id, versionsRaw);
+      for (const v of versions) {
+        db.prepare(
+          'INSERT INTO app_versions (app_id, version_number, label, code, server_code, sql_code) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(newAppId, v.version_number, v.label, '', '', '');
+      }
+      const mv = db.prepare('SELECT MAX(version_number) as mv FROM app_versions WHERE app_id = ?').get(newAppId).mv || 1;
+      lastVersion = Number(mv || 1);
+      db.prepare("UPDATE apps SET current_version = ?, updated_at = datetime('now') WHERE id = ?").run(lastVersion, newAppId);
+    });
+    tx();
+
+    // Allow a little copy time while guaranteeing file integrity.
+    await new Promise(resolve => setTimeout(resolve, 250));
+    cloneAppAllFiles(source.id, newAppId);
+
+    // Hard materialization: always reconstruct files from source versions,
+    // so clone does not depend on source folder state/timing.
+    const sourceVersionsRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number ASC').all(source.id);
+    const sourceVersions = hydrateVersionRows(source.id, sourceVersionsRaw);
+    for (const v of sourceVersions) {
+      const srcFiles = readVersionFiles(source.id, v.version_number);
+      const codeToUse = v.code || srcFiles.code || '';
+      const serverToUse = v.server_code || srcFiles.server_code || '';
+      const sqlToUse = v.sql_code || srcFiles.sql_code || '';
+      writeVersionFiles(newAppId, v.version_number, codeToUse, serverToUse, sqlToUse);
+    }
+
+    validateClonedAppFiles(newAppId, lastVersion);
+
+    const latestRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(newAppId);
+    const latest = hydrateVersionRow(newAppId, latestRaw);
+
+    if (latest) {
+      appendAppSpecSnapshot(newAppId, `${source.name}（コピー）`, latest.version_number || lastVersion, latest.code || '', latest.server_code || '', latest.sql_code || '');
+      writeApiAndDbDocs(newAppId, `${source.name}（コピー）`, latest.version_number || lastVersion, latest.code || '', latest.server_code || '', latest.sql_code || '');
+    }
+
+    let apiPort = null;
+    if (latest?.server_code) {
+      apiPort = await deployAppBackend(newAppId, latest.server_code, latest.sql_code || '', ensurePreviewSlug(newAppId));
+      if (apiPort) db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(apiPort, newAppId);
+    }
+    const previewSlug = ensurePreviewSlug(newAppId);
+    if (latest?.code) startPreview(newAppId, latest.code, '', previewSlug);
+
+    // Final readiness check: only return success when clone files are present.
+    let ready = false;
+    for (let i = 0; i < 10; i++) {
+      try {
+        validateClonedAppFiles(newAppId, lastVersion);
+        ready = true;
+        break;
+      } catch {
+        await new Promise(resolve => setTimeout(resolve, 120));
+      }
+    }
+    if (!ready) throw new Error('clone files not ready');
+
+    ensureAppFilesMaterializedFromDb(newAppId);
+    // Enforce ownership to the user who executed clone.
+    db.prepare("UPDATE apps SET owner_user_id = ?, guest_key = NULL, updated_at = datetime('now') WHERE id = ?").run(req.user.id, newAppId);
+
+    const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(newAppId);
+    const withLink = withPreviewLink(appRow);
+    return res.json({ ...withLink, clone_ready: true, preview_port: getPreviewPort(newAppId), api_port: getApiPort(newAppId) ?? appRow.api_port });
+  } catch (e) {
+    console.error('clone failed:', e?.message || e);
+    if (newAppId) {
+      try {
+        stopPreview(newAppId);
+        stopAppBackend(newAppId);
+        db.prepare('DELETE FROM app_versions WHERE app_id = ?').run(newAppId);
+        db.prepare('DELETE FROM messages WHERE app_id = ?').run(newAppId);
+        db.prepare('DELETE FROM apps WHERE id = ?').run(newAppId);
+        fs.rmSync(getAppDir(newAppId), { recursive: true, force: true });
+      } catch (cleanupErr) {
+        console.warn('clone rollback warning:', cleanupErr?.message || cleanupErr);
+      }
+    }
+    return res.status(500).json({ error: `clone failed: ${String(e?.message || e)}` });
   }
-  const lastVersion = db.prepare('SELECT MAX(version_number) as mv FROM app_versions WHERE app_id = ?').get(newAppId).mv || 1;
-  db.prepare("UPDATE apps SET current_version = ?, updated_at = datetime('now') WHERE id = ?").run(lastVersion, newAppId);
-
-  // Start sandbox preview immediately for cloned app (so user can see before editing)
-  const latest = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(newAppId);
-  let apiPort = null;
-  if (latest?.server_code) {
-    apiPort = await deployAppBackend(newAppId, latest.server_code, latest.sql_code || '', ensurePreviewSlug(newAppId));
-    if (apiPort) db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(apiPort, newAppId);
-  }
-  const previewSlug = ensurePreviewSlug(newAppId);
-  const apiBaseUrl = previewSlug ? `/app/${previewSlug}` : '';
-  if (latest?.code) startPreview(newAppId, latest.code, apiBaseUrl, previewSlug);
-
-  const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(newAppId);
-  const withLink = withPreviewLink(appRow);
-  res.json({ ...withLink, preview_port: getPreviewPort(newAppId), api_port: getApiPort(newAppId) ?? appRow.api_port });
 });
 
 // ── Chat SSE ──────────────────────────────────────────────────────────
 
 app.post('/api/apps/:id/chat', async (req, res) => {
-  const { message, displayMessage } = req.body;
+  const { message, displayMessage, mode, modelKey } = req.body;
   const appId = Number(req.params.id);
 
   const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
   if (!appRow) return res.status(404).json({ error: 'App not found' });
   const user = getAuthUser(req);
+  if (isReleaseEditingLocked(appRow) && user && appRow.owner_user_id === user.id) {
+    const ensured = await ensureWorkspaceDraftFromRelease(getEffectiveReleaseAppId(appRow), user.id);
+    return res.status(409).json(buildWorkspaceDraftRedirectPayload(appRow, ensured.app, ensured.created));
+  }
   const guestKey = getGuestKey(req);
   const ownerMatch = !!(appRow.owner_user_id && user && appRow.owner_user_id === user.id);
   const guestMatch = !!(!appRow.owner_user_id && appRow.guest_key && guestKey && appRow.guest_key === guestKey);
   if (!ownerMatch && !guestMatch) {
     return res.status(403).json({ error: '編集権限がありません' });
   }
+  const selectedModelKey = await resolveSelectedModelKey(typeof modelKey === 'string' ? modelKey : appRow.ai_model_key || null);
+  if ((ownerMatch || guestMatch) && selectedModelKey && selectedModelKey !== appRow.ai_model_key) {
+    db.prepare("UPDATE apps SET ai_model_key = ?, updated_at = datetime('now') WHERE id = ?").run(selectedModelKey, appId);
+    appRow.ai_model_key = selectedModelKey;
+  }
+  const callLlmForApp = (messages) => callLlmOnce(messages, { modelKey: selectedModelKey });
 
   const userDisplay = typeof displayMessage === 'string' && displayMessage.trim() ? displayMessage : message;
   db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)').run(appId, 'user', userDisplay);
-  const history = db.prepare('SELECT role, content FROM messages WHERE app_id = ? ORDER BY created_at ASC').all(appId)
+  ensureAppMemoryFiles(appId);
+  if (user?.id) ensureUserContextDir(user.id);
+  const rawHistory = db.prepare('SELECT role, content FROM messages WHERE app_id = ? ORDER BY created_at ASC').all(appId)
     .map(m => ({ ...m, content: normalizeMessageForModel(m.content) }));
+
+  const latestVersionForIteration = hydrateVersionRow(appId, db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId));
+  const originalFrontendBase = (readLatestFrontendCodeFromFiles(appId) || latestVersionForIteration?.code || '').trim();
+  const appSpec = readAppSpec(appId);
+  const apiContract = readApiContract(appId);
+  const dbSchemaDoc = readDbSchemaDoc(appId);
+  const schemaDiffContext = buildSchemaDiffWarning(appId, dbSchemaDoc);
+  const hasExistingVersion = !!originalFrontendBase;
+  const requestedMode = ['create', 'edit', 'rewrite'].includes(String(mode || '').toLowerCase())
+    ? String(mode).toLowerCase()
+    : (hasExistingVersion ? 'edit' : 'create');
+
+  const history = buildWorkspaceHistory({
+    requestedMode,
+    rawHistory,
+    userDisplay,
+    appRow,
+    originalFrontendBase,
+    appSpec,
+    apiContract,
+    dbSchemaDoc,
+    readModeDoc,
+    normalizeMessageForModel,
+    schemaDiffContext,
+  });
 
   res.setHeader('Content-Type',  'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1383,42 +3759,27 @@ app.post('/api/apps/:id/chat', async (req, res) => {
   const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const response = await fetch(OPENCLAW_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENCLAW_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openclaw',
-        stream: true,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history],
-      }),
+    const runtimeMode = (appRow.runtime_mode || 'local');
+    const isFrontendDevMode = runtimeMode === 'local' || (appRow.release_state || deriveReleaseState(appRow)) !== 'live';
+    const modePrompt = buildModePrompt({
+      requestedMode,
+      runtimeMode,
+      appStatus: appRow.status,
+      appRow,
+      userId: user?.id ?? null,
+      appId,
+      schemaDiffContext,
     });
 
-    if (!response.ok) {
-      send({ type: 'error', message: `OpenClaw ${response.status}` });
-      return res.end();
-    }
-
-    let full = '';
-    const reader = response.body.getReader();
-    const dec    = new TextDecoder();
-    let buf = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const raw = line.slice(6).trim();
-        if (raw === '[DONE]') continue;
-        try {
-          const delta = JSON.parse(raw).choices?.[0]?.delta?.content || '';
-          if (delta) { full += delta; send({ type: 'delta', content: delta }); }
-        } catch {}
-      }
-    }
+    const full = await streamLlmText(
+      [{ role: 'system', content: modePrompt }, ...history],
+      {
+        modelKey: selectedModelKey,
+        onTextDelta: (delta) => {
+          if (delta) send({ type: 'delta', content: delta });
+        },
+      },
+    );
 
     // Save assistant message
     db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)').run(appId, 'assistant', full);
@@ -1427,17 +3788,80 @@ app.post('/api/apps/:id/chat', async (req, res) => {
     const { jsx, server, sql } = parseAIResponse(full);
 
     if (!jsx) {
+      send({ type: 'error', message: '生成未成功：模型没有返回有效的 App JSX，所以不会进入预览。' });
       send({ type: 'done' });
       return res.end();
     }
 
+    const previousVersionRaw = db.prepare('SELECT * FROM app_versions WHERE app_id = ? ORDER BY version_number DESC LIMIT 1').get(appId);
+    const previousVersion = hydrateVersionRow(appId, previousVersionRaw);
+    const previousFrontendFromFile = readLatestFrontendCodeFromFiles(appId);
+    const previousFrontendBase = previousFrontendFromFile || previousVersion?.code || '';
+    const maxChangeRatio = inferAllowedChangeRatio(message);
+    const workspaceProfile = inferWorkspaceIterationProfile({ message, runtimeMode, appStatus: appRow.status });
+
     const preflight = lintAndRepairJsx(jsx);
     let safeJsx = preflight.code;
 
-    // Enforce selected design pattern tokens from prompt (one restyle retry if missing)
-    const requiredDesignTokens = extractDesignTokensFromPrompt(message);
-    if (requiredDesignTokens.length && !isDesignApplied(safeJsx, requiredDesignTokens)) {
-      const restylePrompt = `Restyle the following JSX to match the selected design paradigm.
+    if (requestedMode === 'edit' && workspaceProfile.preferEarlyGuard) {
+      const early = validateWorkspaceIterationEarly({ frontendCode: safeJsx, previousFrontendCode: previousFrontendBase, userMessage: message });
+      if (!early.ok && early.errors.some(err => err.includes('destructive rewrite'))) {
+        const msg = `Workspace early validation failed: ${early.errors.join(' | ')}`;
+        db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)').run(appId, 'assistant', `⚠️ ${msg}`);
+        send({ type: 'error', message: msg });
+        send({ type: 'done' });
+        return res.end();
+      }
+    }
+
+    if (requestedMode === 'create' || requestedMode === 'edit' || requestedMode === 'rewrite') {
+      console.log(`  ⚡ Fast-path ${requestedMode} mode enabled for app ${appId} (skip sync check/enhance passes)`);
+    }
+
+    if (requestedMode !== 'create' && requestedMode !== 'edit' && requestedMode !== 'rewrite') {
+      // Incremental-first best practice only for Edit mode.
+      if (requestedMode === 'edit' && !isIncrementalChangePreferred(previousFrontendBase, safeJsx, maxChangeRatio)) {
+        try {
+          const incrementalPrompt = `You are updating an existing app. Do MINIMAL CHANGES only.
+Rules:
+- Keep unchanged code lines exactly as-is whenever possible
+- Only edit the smallest necessary sections to satisfy the new request
+- Do NOT rename unrelated variables/components
+- Do NOT reorder unrelated blocks
+- Return complete JSX only in a jsx code block
+
+User request:
+${message}
+
+Current JSX (must be your base):
+\`\`\`jsx
+${previousFrontendBase}
+\`\`\`
+
+Last generated JSX (too large rewrite; reduce it):
+\`\`\`jsx
+${safeJsx}
+\`\`\``;
+          const minimized = await callLlmForApp([
+            { role: 'system', content: modePrompt },
+            { role: 'user', content: incrementalPrompt },
+          ]);
+          const parsedMin = parseAIResponse(minimized);
+          if (parsedMin.jsx) {
+            const minPre = lintAndRepairJsx(parsedMin.jsx);
+            if (isIncrementalChangePreferred(previousFrontendBase, minPre.code, maxChangeRatio)) {
+              safeJsx = minPre.code;
+            }
+          }
+        } catch (e) {
+          console.warn('incremental minimize retry skipped:', e?.message || e);
+        }
+      }
+
+      // Enforce selected design pattern tokens from prompt (one restyle retry if missing)
+      const requiredDesignTokens = extractDesignTokensFromPrompt(message);
+      if (requiredDesignTokens.length && !isDesignApplied(safeJsx, requiredDesignTokens)) {
+        const restylePrompt = `Restyle the following JSX to match the selected design paradigm.
 Rules:
 - Keep business logic and API endpoints unchanged
 - Rewrite only UI structure/className to satisfy design tokens
@@ -1448,16 +3872,82 @@ Current JSX:
 \`\`\`jsx
 ${safeJsx}
 \`\`\``;
-      const restyled = await callOpenClawOnce([
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: restylePrompt },
-      ]);
-      const parsedRestyle = parseAIResponse(restyled);
-      if (parsedRestyle.jsx) {
-        const preflight2 = lintAndRepairJsx(parsedRestyle.jsx);
-        if (isDesignApplied(preflight2.code, requiredDesignTokens)) {
-          safeJsx = preflight2.code;
+        const restyled = await callLlmForApp([
+          { role: 'system', content: modePrompt },
+          { role: 'user', content: restylePrompt },
+        ]);
+        const parsedRestyle = parseAIResponse(restyled);
+        if (parsedRestyle.jsx) {
+          const preflight2 = lintAndRepairJsx(parsedRestyle.jsx);
+          if (isDesignApplied(preflight2.code, requiredDesignTokens)) {
+            safeJsx = preflight2.code;
+          }
         }
+      }
+
+      try {
+        const repair = await runRepairPass({
+          mode: requestedMode,
+          frontendCode: safeJsx,
+          userMessage: message,
+          appSpec,
+          apiContract,
+          maxRetries: 1,
+          callLlmOnce: callLlmForApp,
+          parseAIResponse,
+          lintAndRepairJsx,
+          validateFrontendOnlyArtifacts,
+          extractFrontendApiContracts,
+          appRow,
+          userId: user?.id ?? null,
+          appId,
+          runtimeMode,
+          appStatus: appRow.status,
+          schemaDiffContext,
+        });
+        if (repair?.code) safeJsx = repair.code;
+      } catch (e) {
+        console.warn('repair pass skipped:', e?.message || e);
+      }
+    }
+
+    // Two-phase generation (A: minimal runnable, B: enhanced UX). Keep user-facing as one turn.
+    const phaseA = (requestedMode === 'edit' && workspaceProfile.preferEarlyGuard)
+      ? validateWorkspaceIterationEarly({ frontendCode: safeJsx, previousFrontendCode: previousFrontendBase, userMessage: message })
+      : validateFrontendOnlyArtifacts(safeJsx);
+    if (!phaseA.ok) {
+      const msg = `Phase-A validation failed: ${phaseA.errors.join(' | ')}`;
+      db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)').run(appId, 'assistant', `⚠️ ${msg}`);
+      send({ type: 'error', message: msg });
+      send({ type: 'done' });
+      return res.end();
+    }
+
+    if (requestedMode !== 'create' && requestedMode !== 'edit' && requestedMode !== 'rewrite' && !workspaceProfile.skipEnhancementPass) {
+      try {
+        const phaseBPrompt = `You are in Phase-B enhancement. Improve UI polish and interactions while preserving runtime safety.
+Rules:
+- Keep all existing business logic and data flow intact
+- Do not add unknown custom components/imports
+- Keep code runnable in current no-import sandbox
+- Return full JSX only in a jsx code block
+
+Current safe Phase-A JSX:
+\`\`\`jsx
+${safeJsx}
+\`\`\``;
+        const enhanced = await callLlmForApp([
+          { role: 'system', content: modePrompt },
+          { role: 'user', content: phaseBPrompt },
+        ]);
+        const p = parseAIResponse(enhanced);
+        if (p.jsx) {
+          const pre = lintAndRepairJsx(p.jsx);
+          const phaseB = validateFrontendOnlyArtifacts(pre.code);
+          if (phaseB.ok) safeJsx = pre.code;
+        }
+      } catch (e) {
+        console.warn('phase-b enhance skipped:', e?.message || e);
       }
     }
 
@@ -1465,8 +3955,44 @@ ${safeJsx}
     const verNum = (db.prepare('SELECT COUNT(*) as c FROM app_versions WHERE app_id = ?').get(appId).c) + 1;
     const vr = db.prepare(
       'INSERT INTO app_versions (app_id, version_number, code, server_code, sql_code) VALUES (?, ?, ?, ?, ?)'
-    ).run(appId, verNum, safeJsx, server ?? null, sql ?? null);
+    ).run(appId, verNum, '', '', '');
     db.prepare("UPDATE apps SET current_version = ?, updated_at = datetime('now') WHERE id = ?").run(verNum, appId);
+    writeVersionFiles(appId, verNum, safeJsx, isFrontendDevMode ? '' : (server ?? ''), isFrontendDevMode ? '' : (sql ?? ''));
+
+    // Update per-app spec doc for future iteration baseline
+    try {
+      if (requestedMode === 'create') {
+        appendAppSpecSnapshot(appId, appRow.name, verNum, safeJsx, '', '');
+        writeApiAndDbDocs(appId, appRow.name, verNum, safeJsx, '', '');
+        writeCreateProposalDocs(appId, {
+          appName: appRow.name,
+          versionNumber: verNum,
+          frontendCode: safeJsx,
+          serverCode: server ?? '',
+          sqlCode: sql ?? '',
+        });
+      } else {
+        appendAppSpecSnapshot(appId, appRow.name, verNum, safeJsx, server ?? '', sql ?? '');
+        writeApiAndDbDocs(appId, appRow.name, verNum, safeJsx, server ?? '', sql ?? '');
+      }
+      updateWorkspaceModeDocs(appId, requestedMode, {
+        appName: appRow.name,
+        userMessage: message,
+        frontendCode: safeJsx,
+        serverCode: server ?? '',
+        sqlCode: sql ?? '',
+        versionNumber: verNum,
+      });
+      writeReleaseNotes(appId, {
+        appName: appRow.name,
+        sourceMode: requestedMode,
+        releaseAppId: getEffectiveReleaseAppId(appRow),
+        userMessage: message,
+        versionNumber: verNum,
+      });
+    } catch (e) {
+      console.warn('spec/api docs warning:', e.message);
+    }
 
     // Auto-name
     if (appRow.name === '新規アプリ') {
@@ -1492,14 +4018,25 @@ ${safeJsx}
       }
     }
 
-    {
+    if (runtimeMode === 'server') {
       const contract = injectMissingApiStubs(safeJsx, serverToUse || '');
       if (contract.missing.length > 0) {
         console.log(`  🧩 Auto-filled ${contract.missing.length} missing API route(s) for app ${appId}`);
         serverToUse = contract.code;
       }
+      if (serverToUse && serverToUse.trim()) {
+        const normalizedBackend = normalizeBackendSqlStrings(serverToUse || '');
+        if (normalizedBackend.changed && normalizedBackend.code) {
+          console.log(`  🧹 Normalized ${normalizedBackend.rewrites?.length || 0} backend SQL string(s) for app ${appId}`);
+          serverToUse = normalizedBackend.code;
+        }
+      }
 
-      const validation = validateGeneratedArtifacts(safeJsx, serverToUse || '', sqlToUse || '');
+      const validation = validateGeneratedArtifacts(safeJsx, serverToUse || '', sqlToUse || '', {
+        frontendCode: previousVersion?.code || '',
+        serverCode: previousVersion?.server_code || '',
+        sqlCode: previousVersion?.sql_code || '',
+      });
       if (!validation.ok) {
         const msg = `生成物検証に失敗: ${validation.errors.join(' | ')}`;
         db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)').run(appId, 'assistant', `⚠️ ${msg}`);
@@ -1516,19 +4053,28 @@ ${safeJsx}
           send({ type: 'backend', apiPort });
         }
       }
-    }
 
-    if (serverToUse) {
-      db.prepare('UPDATE app_versions SET server_code = ?, sql_code = ? WHERE id = ?')
-        .run(serverToUse, sqlToUse ?? null, vr.lastInsertRowid);
+      if (serverToUse) {
+        db.prepare('UPDATE app_versions SET server_code = ?, sql_code = ? WHERE id = ?')
+          .run(serverToUse, sqlToUse ?? null, vr.lastInsertRowid);
+        writeVersionFiles(appId, verNum, safeJsx, serverToUse || '', sqlToUse || '');
+      }
     }
 
     // ── Start preview server ──────────────────────────────────────────
     // Use SERVER_HOST (auto-detected LAN IP) so preview iframes work
     // from any device on the LAN, not just localhost
     const previewSlug = ensurePreviewSlug(appId);
-    const apiBaseUrl = previewSlug ? `/app/${previewSlug}` : '';
-    const previewPort = startPreview(appId, safeJsx, apiBaseUrl, previewSlug);
+    const previewPort = startPreview(appId, safeJsx, '', previewSlug);
+
+    const savedAppFile = path.join(getAppDir(appId), 'App.jsx');
+    const currentVersionAppFile = path.join(getVersionDir(appId, verNum), 'App.jsx');
+    const workspaceReady = fs.existsSync(savedAppFile) && fs.statSync(savedAppFile).size > 0 && fs.existsSync(currentVersionAppFile) && fs.statSync(currentVersionAppFile).size > 0;
+    if (!workspaceReady) {
+      send({ type: 'error', message: '生成未成功：前端版本文件没有正确落盘，已阻止进入预览。' });
+      send({ type: 'done' });
+      return res.end();
+    }
 
     send({
       type: 'code',
@@ -1537,10 +4083,10 @@ ${safeJsx}
       versionNumber: verNum,
       previewPort,
       previewSlug,
-      previewPath: previewSlug ? `/app/${previewSlug}/` : null,
+      previewPath: buildWorkspacePreviewPath(ensureWorkspaceSlug(appId)),
       apiPort,
-      hasBackend: !!server,
-      hasDb: !!sql,
+      hasBackend: runtimeMode === 'server' && !!server,
+      hasDb: runtimeMode === 'server' && !!sql,
     });
 
     send({ type: 'done' });
@@ -1574,71 +4120,102 @@ app.post('/api/apps/:id/auto-fix', async (req, res) => {
     const appRow = db.prepare('SELECT * FROM apps WHERE id = ?').get(appId);
     if (!appRow) return res.status(404).json({ error: 'App not found' });
     const user = getAuthUser(req);
+    if (isReleaseEditingLocked(appRow) && user && appRow.owner_user_id === user.id) {
+      const ensured = await ensureWorkspaceDraftFromRelease(getEffectiveReleaseAppId(appRow), user.id);
+      return res.status(409).json(buildWorkspaceDraftRedirectPayload(appRow, ensured.app, ensured.created));
+    }
     const guestKey = getGuestKey(req);
     const ownerMatch = !!(appRow.owner_user_id && user && appRow.owner_user_id === user.id);
     const guestMatch = !!(!appRow.owner_user_id && appRow.guest_key && guestKey && appRow.guest_key === guestKey);
     if (!ownerMatch && !guestMatch) {
       return res.status(403).json({ error: '編集権限がありません' });
     }
+    const selectedModelKey = await resolveSelectedModelKey(appRow.ai_model_key || null);
+    const callLlmForApp = (messages) => callLlmOnce(messages, { modelKey: selectedModelKey });
 
-    const latest = db.prepare(`
+    const latestRaw = db.prepare(`
       SELECT * FROM app_versions
       WHERE app_id = ?
       ORDER BY version_number DESC
       LIMIT 1
     `).get(appId);
+    const latest = hydrateVersionRow(appId, latestRaw);
     if (!latest?.code) return res.status(400).json({ error: 'No previous code to fix' });
+    const runtimeMode = appRow.runtime_mode || 'local';
+    const hasPersistedBackend = !!String(latest.server_code || '').trim()
+      || runtimeMode === 'server'
+      || !!(getApiPort(appId) ?? appRow.api_port);
 
     const looksLikeInfraError =
       ['NetworkError', 'APIError'].includes(errorType) ||
       /\b502\b|bad gateway|ECONNREFUSED|fetch failed|network/i.test(`${error}\n${detail}`);
+    const shouldTryInfraRecovery = looksLikeInfraError && hasPersistedBackend;
 
     // Diagnose/recover infra first for common 502-class errors before asking AI to rewrite code.
-    if (looksLikeInfraError) {
+    if (shouldTryInfraRecovery) {
       const recoveredContract = injectMissingApiStubs(latest.code || '', latest.server_code || '');
-      const recoveredServer = recoveredContract.code;
+      const recoveredNormalization = normalizeBackendSqlStrings(recoveredContract.code || '');
+      const recoveredServer = recoveredNormalization.code || recoveredContract.code;
       let recoveredApiPort = null;
+      const previewSlug = ensurePreviewSlug(appId);
       if (recoveredServer && recoveredServer.trim()) {
-        recoveredApiPort = await deployAppBackend(appId, recoveredServer, latest.sql_code || '', ensurePreviewSlug(appId));
+        recoveredApiPort = await deployAppBackend(appId, recoveredServer, latest.sql_code || '', previewSlug);
         if (recoveredApiPort) {
           db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(recoveredApiPort, appId);
         }
         db.prepare('UPDATE app_versions SET server_code = ? WHERE id = ?').run(recoveredServer, latest.id);
       }
-      const recoveredApiBase = recoveredApiPort ? `http://${SERVER_HOST}:${recoveredApiPort}` : '';
-      const previewSlug = ensurePreviewSlug(appId);
-      const recoveredPreviewPort = startPreview(appId, latest.code, recoveredApiBase, previewSlug);
+      if (!recoveredApiPort) {
+        appendAppFailures(appId, `\n## ${new Date().toISOString()} auto-fix infra recovery skipped\n- detail: backend restart was attempted but no runtime became reachable; continuing to AI repair is required.\n`);
+      } else {
+        const recoveredPreviewPort = startPreview(appId, latest.code, '', previewSlug);
 
-      db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)')
-        .run(appId, 'assistant', `🩺 まずインフラを復旧しました（backend/preview 再起動）: ${errorType}`);
+        db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)')
+          .run(appId, 'assistant', `🩺 まずインフラを復旧しました（backend/preview 再起動）: ${errorType}`);
 
-      return res.json({
-        ok: true,
-        recovered: true,
-        message: 'infra recovered (backend/preview restarted)',
-        versionId: latest.id,
-        versionNumber: latest.version_number,
-        previewPort: recoveredPreviewPort,
-        previewSlug: previewSlug,
-        previewPath: previewSlug ? `/app/${previewSlug}/` : null,
-        apiPort: recoveredApiPort,
-        hasBackend: true,
-        hasDb: !!(latest.sql_code || '').trim(),
-        code: latest.code,
-      });
+        setAppStage(appId, 'backend_verified', 'infra recovered and runtime restarted');
+        return res.json({
+          ok: true,
+          recovered: true,
+          message: 'infra recovered (backend/preview restarted)',
+          versionId: latest.id,
+          versionNumber: latest.version_number,
+          previewPort: recoveredPreviewPort,
+          previewSlug: previewSlug,
+          previewPath: buildWorkspacePreviewPath(ensureWorkspaceSlug(appId)),
+          apiPort: recoveredApiPort,
+          hasBackend: true,
+          hasDb: !!(latest.sql_code || '').trim(),
+          code: latest.code,
+        });
+      }
     }
 
-    const fixPrompt = `You are funfo AI's auto-fixer. Repair the app based on runtime error logs.
+    const currentDbSchemaDoc = readDbSchemaDoc(appId);
+    const schemaDiffContext = buildSchemaDiffWarning(appId, currentDbSchemaDoc);
+    const appSpec = readAppSpec(appId);
+    const apiContract = readApiContract(appId);
+    const buildAutoFixPrompt = ({
+      frontendCode = latest.code || '',
+      backendCode = latest.server_code || '',
+      sqlCode = latest.sql_code || '',
+      browserFailureContext = '',
+    } = {}) => `You are funfo AI's auto-fixer. Repair the app based on runtime error logs.
 
-Rules:
+${schemaDiffContext ? `[SCHEMA_DIFF_WARNING]\n${schemaDiffContext}\n\n` : ''}Rules:
 - Return complete frontend in \`\`\`jsx block (required)
 - If backend changes are needed, include \`\`\`javascript server block
 - If DB changes are needed, include \`\`\`sql block
+- Preserve existing features and old APIs unless explicitly requested to remove
+- Preserve existing data compatibility (non-destructive DB evolution only)
 - No import statements
 - No TypeScript syntax
 - All UI text in Japanese
 - Use Tailwind className styling
 - Ensure all fetch endpoints used in frontend exist in backend routes
+- Respect the app runtime mode:
+  - local mode -> prefer frontend-only repair; remove accidental backend/API dependencies unless the app already has a real backend
+  - server mode -> preserve API-driven flows and repair backend/contracts instead of deleting them
 
 Error Context:
 - type: ${errorType}
@@ -1647,95 +4224,218 @@ Error Context:
 - url: ${url}
 - retries: ${retries}
 
-Current frontend code:
+${browserFailureContext ? `Browser verification findings from the previous repair attempt:
+${browserFailureContext}
+
+` : ''}Current frontend code:
 \`\`\`jsx
-${latest.code}
+${frontendCode}
 \`\`\`
 
 Current backend code:
 \`\`\`javascript
-${latest.server_code || ''}
+${backendCode}
 \`\`\`
 
 Current SQL:
 \`\`\`sql
-${latest.sql_code || ''}
+${sqlCode}
 \`\`\`
 `;
 
-    const full = await callOpenClawOnce([
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: fixPrompt },
-    ]);
+    const repairSystemPrompt = buildRepairSystemPrompt({
+      requestedMode: 'edit',
+      runtimeMode: appRow.runtime_mode || 'server',
+      appStatus: appRow.status,
+      appRow,
+      userId: user?.id ?? null,
+      appId,
+    });
+    const previewSlug = ensurePreviewSlug(appId);
+    const workspaceSlug = ensureWorkspaceSlug(appId);
+    const previewPath = buildWorkspacePreviewPath(workspaceSlug);
+    let safeJsx = '';
+    let serverToUse = latest.server_code ?? null;
+    let sqlToUse = latest.sql_code ?? '';
+    let browserSmoke = null;
+    let previewPort = null;
+    let apiPort = getApiPort(appId) ?? appRow.api_port ?? null;
+    let assistantReply = '';
+    let browserFailureContext = '';
 
-    const { jsx, server, sql } = parseAIResponse(full);
-    if (!jsx) return res.status(422).json({ error: 'Model returned no jsx block' });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const full = await callLlmForApp([
+        { role: 'system', content: repairSystemPrompt },
+        { role: 'user', content: buildAutoFixPrompt({
+          frontendCode: attempt === 1 ? (latest.code || '') : safeJsx,
+          backendCode: attempt === 1 ? (latest.server_code || '') : (serverToUse || ''),
+          sqlCode: attempt === 1 ? (latest.sql_code || '') : (sqlToUse || ''),
+          browserFailureContext,
+        }) },
+      ]);
+      assistantReply = full;
 
-    const preflight = lintAndRepairJsx(jsx);
-    const safeJsx = preflight.code;
+      const { jsx, server, sql } = parseAIResponse(full);
+      if (jsx) {
+        const preflight = lintAndRepairJsx(jsx);
+        safeJsx = preflight.code;
+      } else {
+        const fallbackRepair = await runRepairPass({
+          mode: 'edit',
+          frontendCode: attempt === 1 ? (latest.code || '') : safeJsx,
+          userMessage: `Auto-fix runtime error (${errorType}): ${error}\n${detail || ''}\n${browserFailureContext || ''}`,
+          appSpec,
+          apiContract,
+          maxRetries: 1,
+          callLlmOnce: callLlmForApp,
+          parseAIResponse,
+          lintAndRepairJsx,
+          validateFrontendOnlyArtifacts,
+          extractFrontendApiContracts,
+          appRow,
+          userId: user?.id ?? null,
+          appId,
+          runtimeMode,
+          appStatus: appRow.status,
+          schemaDiffContext,
+        });
+        if (!fallbackRepair?.code) {
+          return res.status(422).json({ error: 'Model returned no jsx block' });
+        }
+        safeJsx = fallbackRepair.code;
+      }
+
+      serverToUse = server ?? serverToUse ?? latest.server_code ?? null;
+      sqlToUse = sql ?? sqlToUse ?? latest.sql_code ?? '';
+
+      {
+        const contract = injectMissingApiStubs(safeJsx, serverToUse || '');
+        if (contract.missing.length > 0) {
+          console.log(`  🧩 Auto-filled ${contract.missing.length} missing API route(s) in auto-fix for app ${appId}`);
+          serverToUse = contract.code;
+        }
+      }
+      if (serverToUse && serverToUse.trim()) {
+        const normalizedBackend = normalizeBackendSqlStrings(serverToUse || '');
+        if (normalizedBackend.changed && normalizedBackend.code) {
+          console.log(`  🧹 Normalized ${normalizedBackend.rewrites?.length || 0} backend SQL string(s) in auto-fix for app ${appId}`);
+          serverToUse = normalizedBackend.code;
+        }
+      }
+
+      const frontendOnlyValidation = validateFrontendOnlyArtifacts(safeJsx);
+      const leakedFrontendContracts = extractFrontendApiContracts(safeJsx);
+      const shouldStayFrontendOnly = runtimeMode !== 'server' && !String(serverToUse || '').trim();
+      const validation = shouldStayFrontendOnly
+        ? {
+            ok: frontendOnlyValidation.ok && leakedFrontendContracts.length === 0,
+            errors: [
+              ...frontendOnlyValidation.errors,
+              ...(leakedFrontendContracts.length > 0
+                ? [`Frontend-only auto-fix still contains API contracts: ${leakedFrontendContracts.slice(0, 4).map(item => `${item.method} ${item.path}`).join(', ')}`]
+                : []),
+            ],
+          }
+        : validateGeneratedArtifacts(safeJsx, serverToUse || '', sqlToUse || '', {
+            frontendCode: latest?.code || '',
+            serverCode: latest?.server_code || '',
+            sqlCode: latest?.sql_code || '',
+          });
+      if (!validation.ok) {
+        return res.status(422).json({ error: `auto-fix validation failed: ${validation.errors.join(' | ')}` });
+      }
+
+      apiPort = getApiPort(appId) ?? appRow.api_port ?? null;
+      if (serverToUse) {
+        apiPort = await deployAppBackend(appId, serverToUse, sqlToUse || '', previewSlug);
+        if (apiPort) db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(apiPort, appId);
+      }
+
+      previewPort = startPreview(appId, safeJsx, '', previewSlug);
+      browserSmoke = await runBrowserSmoke(`http://127.0.0.1:${PORT}${previewPath}/`, {
+        budgetMs: 9000,
+        settleMs: 1000,
+        actionDelayMs: 700,
+      });
+      if (browserSmoke?.ok) break;
+
+      if (String(latest.server_code || '').trim()) {
+        await deployAppBackend(appId, latest.server_code || '', latest.sql_code || '', previewSlug);
+      } else if (String(serverToUse || '').trim()) {
+        stopAppBackend(appId);
+      }
+      startPreview(appId, latest.code || '', '', previewSlug);
+
+      const browserDetail = Array.isArray(browserSmoke?.blockingFailures) && browserSmoke.blockingFailures.length
+        ? browserSmoke.blockingFailures.map(item => `${item.label}: ${item.detail}`).join(' | ')
+        : (browserSmoke?.summary || 'browser smoke failed');
+      browserFailureContext = `Previous browser verification failed on attempt ${attempt}:
+- ${browserDetail}
+
+Repair this exact browser failure and keep all existing working behavior intact.`;
+      if (attempt >= 2) {
+        appendAppFailures(appId, `\n## ${new Date().toISOString()} auto-fix browser smoke failed\n- summary: ${browserSmoke?.summary || 'browser smoke failed'}\n- detail: ${browserDetail}\n`);
+        return res.status(422).json({
+          error: `auto-fix browser verification failed: ${browserDetail}`,
+          browserSmoke,
+          previewPath,
+          previewPort,
+        });
+      }
+    }
 
     const nextVersion = (latest.version_number || 0) + 1;
     const ins = db.prepare(
       'INSERT INTO app_versions (app_id, version_number, label, code, server_code, sql_code) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(appId, nextVersion, `auto-fix v${nextVersion}`, safeJsx, server ?? latest.server_code ?? null, sql ?? latest.sql_code ?? null);
-
+    ).run(appId, nextVersion, `auto-fix v${nextVersion}`, safeJsx, serverToUse ?? '', sqlToUse ?? '');
     db.prepare("UPDATE apps SET current_version = ?, updated_at = datetime('now') WHERE id = ?")
       .run(nextVersion, appId);
+    writeVersionFiles(appId, nextVersion, safeJsx, serverToUse || '', sqlToUse || '');
 
-    let serverToUse = server ?? latest.server_code ?? null;
-    const sqlToUse = sql ?? latest.sql_code ?? '';
-
-    {
-      const contract = injectMissingApiStubs(safeJsx, serverToUse || '');
-      if (contract.missing.length > 0) {
-        console.log(`  🧩 Auto-filled ${contract.missing.length} missing API route(s) in auto-fix for app ${appId}`);
-        serverToUse = contract.code;
-      }
+    try {
+      appendAppSpecSnapshot(appId, appRow.name, nextVersion, safeJsx, serverToUse || '', sqlToUse || '');
+      writeApiAndDbDocs(appId, appRow.name, nextVersion, safeJsx, serverToUse || '', sqlToUse || '');
+    } catch (e) {
+      console.warn('spec/api docs warning:', e.message);
     }
-
-    const validation = validateGeneratedArtifacts(safeJsx, serverToUse || '', sqlToUse || '');
-    if (!validation.ok) {
-      return res.status(422).json({ error: `auto-fix validation failed: ${validation.errors.join(' | ')}` });
-    }
-
-    let apiPort = getApiPort(appId) ?? appRow.api_port ?? null;
-    if (serverToUse) {
-      apiPort = await deployAppBackend(appId, serverToUse, sqlToUse || '', ensurePreviewSlug(appId));
-      if (apiPort) db.prepare('UPDATE apps SET api_port = ? WHERE id = ?').run(apiPort, appId);
-    }
-
-    db.prepare('UPDATE app_versions SET server_code = ?, sql_code = ? WHERE id = ?')
-      .run(serverToUse ?? null, sqlToUse ?? null, ins.lastInsertRowid);
-
-    const previewSlug = ensurePreviewSlug(appId);
-    const apiBaseUrl = previewSlug ? `/app/${previewSlug}` : '';
-    const previewPort = startPreview(appId, safeJsx, apiBaseUrl, previewSlug);
 
     db.prepare('INSERT INTO messages (app_id, role, content) VALUES (?, ?, ?)')
-      .run(appId, 'assistant', `🔧 自動修正を実行しました（${errorType}: ${error.slice(0, 120)}）`);
+      .run(
+        appId,
+        'assistant',
+        `✅ AI 修复完成，已生成 v${nextVersion}、刷新预览，并通过浏览器验证（${errorType}: ${error.slice(0, 120)}）`
+      );
 
+    setAppStage(appId, serverToUse ? 'backend_verified' : 'frontend_ready', serverToUse ? 'auto-fix repaired app and redeployed backend' : 'auto-fix updated frontend only');
+    appendAppReleaseNotes(appId, `\n## ${new Date().toISOString()} auto-fix success\n- version: v${nextVersion}\n- backend: ${serverToUse ? 'yes' : 'no'}\n- db: ${sqlToUse ? 'yes' : 'no'}\n`);
+    appendAppMemory(appId, `\n- ${new Date().toISOString()}: auto-fix succeeded; created v${nextVersion}; backend=${serverToUse ? 'enabled' : 'frontend-only'}.\n`);
     res.json({
       ok: true,
       versionId: ins.lastInsertRowid,
       versionNumber: nextVersion,
       previewPort,
       previewSlug,
-      previewPath: previewSlug ? `/app/${previewSlug}/` : null,
+      previewPath,
       apiPort,
       hasBackend: !!serverToUse,
       hasDb: !!sqlToUse,
-      message: 'auto-fix applied',
+      message: 'auto-fix applied and browser-verified',
       code: safeJsx,
-      assistant: full,
+      assistant: assistantReply,
+      browserSmoke,
     });
   } catch (err) {
     console.error('auto-fix error:', err);
     const appId = Number(req.params.id);
     const msg = String(err?.message || err || 'auto-fix failed');
+    appendAppReleaseNotes(appId, `\n## ${new Date().toISOString()} auto-fix failed\n- detail: ${msg}\n`);
+    appendAppMemory(appId, `\n- ${new Date().toISOString()}: auto-fix failed; detail=${msg}.\n`);
+    appendAppFailures(appId, `\n## ${new Date().toISOString()} auto-fix failed\n- detail: ${msg}\n`);
     // timeout/abort/network class errors -> cooldown to prevent loop storms
-    if (/aborted|timeout|timed out|fetch failed|network|OpenClaw 5\d\d/i.test(msg)) {
+    if (/aborted|timeout|timed out|fetch failed|network|5\d\d/i.test(msg)) {
       autoFixCooldownUntil.set(appId, Date.now() + 90 * 1000);
     }
+    setAppStage(appId, 'repair_needed', msg);
     res.status(500).json({ error: msg });
   } finally {
     const appId = Number(req.params.id);

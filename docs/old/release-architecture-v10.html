@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>funfo AI Store · Release Architecture v10</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fafafa;
+      --card: #ffffff;
+      --border: #e2e5ea;
+      --text: #1a1d23;
+      --text2: #4b5060;
+      --text3: #8b91a0;
+      --accent: #2563eb;
+      --accent-light: #eff4ff;
+      --green: #16a34a;
+      --green-bg: #f0fdf4;
+      --red: #dc2626;
+      --red-bg: #fef2f2;
+      --yellow: #ca8a04;
+      --yellow-bg: #fefce8;
+      --purple: #7c3aed;
+      --purple-bg: #f5f3ff;
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Noto Sans SC', -apple-system, sans-serif;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--sans); background: var(--bg); color: var(--text); line-height: 1.7; -webkit-font-smoothing: antialiased; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 40px 20px 80px; }
+
+    /* Header */
+    .header { margin-bottom: 40px; }
+    .header h1 { font-size: 26px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 6px; }
+    .header .sub { font-size: 13px; color: var(--text3); }
+    .version-badge { display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 20px; margin-left: 10px; vertical-align: middle; letter-spacing: 0.5px; }
+
+    /* Cards */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 17px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .card h3 { font-size: 14px; font-weight: 600; margin: 18px 0 8px; color: var(--text); }
+    .card p { font-size: 14px; color: var(--text2); margin-bottom: 10px; }
+    .card ul { padding-left: 18px; margin-bottom: 10px; }
+    .card li { font-size: 14px; color: var(--text2); margin-bottom: 4px; }
+    .card li strong { color: var(--text); font-weight: 600; }
+
+    /* Score header */
+    .score-row { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; padding: 20px 24px; background: linear-gradient(135deg, #1e293b, #334155); border-radius: var(--radius); color: #fff; }
+    .score-num { font-size: 48px; font-weight: 700; line-height: 1; }
+    .score-label { font-size: 13px; opacity: 0.7; margin-bottom: 2px; }
+    .score-desc { font-size: 15px; font-weight: 500; }
+
+    /* Code */
+    code { font-family: var(--mono); font-size: 12.5px; background: #f1f3f7; padding: 2px 7px; border-radius: 5px; color: #d946a8; font-weight: 500; }
+
+    /* Flow diagram */
+    .flow { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin: 16px 0; }
+    .flow-step { background: var(--accent-light); border: 1px solid #bfdbfe; border-radius: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+    .flow-step.green { background: var(--green-bg); border-color: #bbf7d0; color: var(--green); }
+    .flow-step.red { background: var(--red-bg); border-color: #fecaca; color: var(--red); }
+    .flow-step.yellow { background: var(--yellow-bg); border-color: #fef08a; color: var(--yellow); }
+    .flow-step.purple { background: var(--purple-bg); border-color: #ddd6fe; color: var(--purple); }
+    .flow-arrow { font-size: 16px; color: var(--text3); padding: 0 6px; flex-shrink: 0; }
+    .flow-branch { display: flex; flex-direction: column; gap: 6px; margin-left: 8px; }
+
+    /* State machine */
+    .state-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    .state-table th { background: #f8f9fb; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    .state-table td { padding: 10px 14px; font-size: 13.5px; border-bottom: 1px solid #f1f3f5; vertical-align: top; }
+    .state-table tr:last-child td { border-bottom: none; }
+    .state-tag { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .state-tag.draft { background: #f1f3f7; color: var(--text3); }
+    .state-tag.candidate { background: var(--yellow-bg); color: var(--yellow); }
+    .state-tag.live { background: var(--green-bg); color: var(--green); }
+    .state-tag.failed { background: var(--red-bg); color: var(--red); }
+    .state-tag.rollback { background: var(--purple-bg); color: var(--purple); }
+
+    /* Checklist */
+    .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+    @media (max-width: 640px) { .check-grid { grid-template-columns: 1fr; } }
+    .check-item { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; color: var(--text2); padding: 10px 12px; background: #f8f9fb; border-radius: 8px; }
+    .check-item .icon { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+    .check-item .icon.block { background: var(--red-bg); color: var(--red); }
+    .check-item .icon.warn { background: var(--yellow-bg); color: var(--yellow); }
+
+    /* Timeline */
+    .timeline { position: relative; padding-left: 28px; margin: 16px 0; }
+    .timeline::before { content: ''; position: absolute; left: 9px; top: 4px; bottom: 4px; width: 2px; background: var(--border); }
+    .tl-item { position: relative; margin-bottom: 16px; }
+    .tl-item:last-child { margin-bottom: 0; }
+    .tl-dot { position: absolute; left: -28px; top: 3px; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--accent); background: #fff; }
+    .tl-item.done .tl-dot { background: var(--accent); border-color: var(--accent); }
+    .tl-item.done .tl-dot::after { content: '✓'; color: #fff; font-size: 10px; display: flex; align-items: center; justify-content: center; height: 100%; }
+    .tl-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+    .tl-desc { font-size: 13px; color: var(--text3); }
+    .tl-week { font-size: 11px; color: var(--accent); font-weight: 600; margin-bottom: 2px; }
+
+    /* Divider */
+    .divider { height: 1px; background: var(--border); margin: 20px 0; }
+
+    /* Highlight box */
+    .highlight { padding: 14px 18px; border-radius: 8px; font-size: 13.5px; margin: 12px 0; }
+    .highlight.blue { background: var(--accent-light); border-left: 3px solid var(--accent); color: #1e40af; }
+    .highlight.red { background: var(--red-bg); border-left: 3px solid var(--red); color: #991b1b; }
+    .highlight.green { background: var(--green-bg); border-left: 3px solid var(--green); color: #166534; }
+
+    /* Section numbering */
+    .section-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <!-- Header -->
+    <div class="header">
+      <h1>funfo AI Store · Release Architecture <span class="version-badge">v10 TARGET</span></h1>
+      <div class="sub">在你现有革命方案基础上，补齐所有缺失维度，达到 10 分的完整架构</div>
+    </div>
+
+    <!-- Score -->
+    <div class="score-row">
+      <div>
+        <div class="score-num">10</div>
+      </div>
+      <div>
+        <div class="score-label">TARGET SCORE</div>
+        <div class="score-desc">你原方案 7.1 → 补齐 5 个缺失维度后的目标</div>
+      </div>
+    </div>
+
+    <!-- ─── Section 1: State Machine ─── -->
+    <div class="card">
+      <h2><span class="section-num">1</span> 统一状态机（一步到位，不做过渡）</h2>
+      <p>你原方案说"先用派生状态过渡，后续再收敛底层模型"。<strong>不要过渡。</strong>直接改底层字段。过渡期的双状态并存会制造比改版前更难排查的 bug。</p>
+
+      <h3>唯一的真相：<code>release_state</code> 字段</h3>
+      <table class="state-table">
+        <thead>
+          <tr><th>状态</th><th>含义</th><th>用户看到什么</th><th>容器行为</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="state-tag draft">draft</span></td>
+            <td>仅在 workspace/preview 中存在</td>
+            <td>"编辑中"</td>
+            <td>preview-manager 临时容器</td>
+          </tr>
+          <tr>
+            <td><span class="state-tag candidate">candidate</span></td>
+            <td>已部署候选版本，正在验证</td>
+            <td>"发布验证中…"</td>
+            <td>candidate 容器启动，但不对外暴露</td>
+          </tr>
+          <tr>
+            <td><span class="state-tag live">live</span></td>
+            <td>验证通过，正式上线</td>
+            <td>"运行中" + 绿色徽标</td>
+            <td>candidate promote → live 容器</td>
+          </tr>
+          <tr>
+            <td><span class="state-tag failed">failed</span></td>
+            <td>验证未通过，候选版本已销毁</td>
+            <td>"发布失败" + 具体原因 + 操作按钮</td>
+            <td>candidate 容器停止销毁</td>
+          </tr>
+          <tr>
+            <td><span class="state-tag rollback">rollback</span></td>
+            <td>新版本失败，已自动回退到上一个 live 版本</td>
+            <td>"已回退到 v3"</td>
+            <td>保留旧 live 容器不动</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="highlight blue">
+        <strong>迁移策略：</strong>一次性 migration 把现有 <code>status</code> + <code>publish_status</code> + <code>app_stage</code> + <code>runtime_mode</code> 映射成 <code>release_state</code>，然后删除旧字段。写一个 mapping 函数跑一遍所有 app 记录即可，数据量 ~3000 条，几秒完成。
+      </div>
+    </div>
+
+    <!-- ─── Section 2: Release Pipeline ─── -->
+    <div class="card">
+      <h2><span class="section-num">2</span> 发布管线（candidate → promote/rollback）</h2>
+      <p>这是整个架构的核心杠杆。所有其他改进都是它的推论。</p>
+
+      <h3>Happy Path</h3>
+      <div class="flow">
+        <span class="flow-step">生成 artifact</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step yellow">deploy candidate</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step">health_check</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step">verifier (minimal)</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step green">promote → live</span>
+      </div>
+
+      <h3>Failure Path</h3>
+      <div class="flow">
+        <span class="flow-step">生成 artifact</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step yellow">deploy candidate</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step">health_check / verifier</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step red">FAIL</span>
+        <span class="flow-arrow">→</span>
+        <div class="flow-branch">
+          <span class="flow-step purple">有旧 live → rollback（用户无感）</span>
+          <span class="flow-step red">首次发布 → failed（展示原因 + 操作）</span>
+        </div>
+      </div>
+
+      <h3>关键规则</h3>
+      <ul>
+        <li><strong>candidate 不对终端用户可见。</strong>只有内部验证流程能访问 candidate 容器。</li>
+        <li><strong>promote 是原子操作：</strong>切换路由指向 + 更新 <code>release_state</code> + 记录 <code>live_version_id</code>，三步在一个事务里完成。</li>
+        <li><strong>旧 live 容器在 promote 后保留 5 分钟</strong>再销毁，作为热回退窗口。</li>
+        <li><strong>repair 不在发布管线内。</strong>如果 candidate 验证失败，不自动 repair。直接 fail，让用户回到编辑态重新生成。repair 只作为编辑态的辅助手段存在。</li>
+      </ul>
+    </div>
+
+    <!-- ─── Section 3: Verifier ─── -->
+    <div class="card">
+      <h2><span class="section-num">3</span> Verifier Blocking Criteria（具体定义）</h2>
+      <p>你原方案说"只阻止真正不能上线的问题"。这是对的方向，但缺具体 checklist。这里补齐：</p>
+
+      <h3>🔴 BLOCK（阻止 promote，必须修复）</h3>
+      <div class="check-grid">
+        <div class="check-item"><span class="icon block">B</span>health_check 失败（容器无响应或 5xx）</div>
+        <div class="check-item"><span class="icon block">B</span>前端 JSX 运行时崩溃（白屏 / React error boundary 触发）</div>
+        <div class="check-item"><span class="icon block">B</span>前端存在 API 调用但后端无匹配路由（contract mismatch）</div>
+        <div class="check-item"><span class="icon block">B</span>SQL schema 缺失导致后端路由 500</div>
+        <div class="check-item"><span class="icon block">B</span>后端路由返回 shape 与前端期望不匹配（字段缺失/类型错误）</div>
+        <div class="check-item"><span class="icon block">B</span>数据写入后无法正确读回（CRUD 断裂）</div>
+      </div>
+
+      <h3>🟡 WARNING（不阻止 promote，记录到发布日志）</h3>
+      <div class="check-grid">
+        <div class="check-item"><span class="icon warn">W</span>CSS 渲染异常（布局偏移、溢出、截断）</div>
+        <div class="check-item"><span class="icon warn">W</span>空状态/loading 状态缺失</div>
+        <div class="check-item"><span class="icon warn">W</span>非核心 API 路由未实现（次要功能）</div>
+        <div class="check-item"><span class="icon warn">W</span>性能问题（响应 >2s 但功能正常）</div>
+        <div class="check-item"><span class="icon warn">W</span>日文文案错误/缺失</div>
+        <div class="check-item"><span class="icon warn">W</span>Console warning（非 error）</div>
+      </div>
+
+      <div class="highlight blue">
+        <strong>原则：</strong>BLOCK 只管"能不能用"。WARNING 管"好不好用"。用户可以带 warning 上线，后续迭代修复。
+      </div>
+    </div>
+
+    <!-- ─── Section 4: Failure UX ─── -->
+    <div class="card">
+      <h2><span class="section-num">4</span> 失败后的用户行动路径</h2>
+      <p>你原方案没有覆盖这个维度。用户看到 <span class="state-tag failed">failed</span> 之后能做什么，决定了整个体验是"清晰的失败"还是"死胡同"。</p>
+
+      <h3>场景 A：首次发布失败（没有旧 live 版本）</h3>
+      <ul>
+        <li>展示：<strong>"発布に失敗しました"</strong> + 失败原因摘要（来自 verifier BLOCK 项）</li>
+        <li>操作按钮 ①：<strong>"編集に戻る"</strong> → 回到 workspace 编辑态，带上失败原因作为 context</li>
+        <li>操作按钮 ②：<strong>"自動修正を試す"</strong> → 触发 repair agent 在编辑态修复，修复后用户手动再次发布</li>
+        <li>状态：app 回到 <span class="state-tag draft">draft</span></li>
+      </ul>
+
+      <h3>场景 B：更新发布失败（有旧 live 版本）</h3>
+      <ul>
+        <li>自动行为：rollback 到上一个 live 版本，终端用户无感</li>
+        <li>展示：<strong>"新バージョンの発布に失敗しました。v3 に自動ロールバックしました"</strong></li>
+        <li>操作按钮 ①：<strong>"新バージョンを編集"</strong> → 回到编辑态继续改</li>
+        <li>操作按钮 ②：<strong>"失敗ログを見る"</strong> → 查看 verifier 详细报告</li>
+        <li>状态：app 的 <code>release_state</code> 回到 <span class="state-tag live">live</span>（旧版本），编辑态有一个 draft 版本可以继续改</li>
+      </ul>
+
+      <div class="highlight green">
+        <strong>核心原则：</strong>失败不是死胡同，而是一个带上下文的回退。用户总能从失败状态出发采取下一步行动，且旧版本的在线服务不会中断。
+      </div>
+    </div>
+
+    <!-- ─── Section 5: Repair Repositioning ─── -->
+    <div class="card">
+      <h2><span class="section-num">5</span> Repair 重新定位</h2>
+      <p>你原方案说"减少 repair 次数和权重"。10 分版本更进一步：<strong>repair 从发布管线中完全移除，只存在于编辑态。</strong></p>
+
+      <table class="state-table">
+        <thead>
+          <tr><th>维度</th><th>原方案</th><th>10 分版本</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>repair 触发时机</td>
+            <td>发布流程中，verifier 失败后自动 repair</td>
+            <td>仅在编辑态，用户主动点击"自動修正"触发</td>
+          </tr>
+          <tr>
+            <td>repair 上限</td>
+            <td>减少次数（具体未定）</td>
+            <td>编辑态最多 2 次自动修复，之后引导用户手动编辑或重新描述需求</td>
+          </tr>
+          <tr>
+            <td>发布管线里的 repair</td>
+            <td>仍保留但减少权重</td>
+            <td>完全移除。candidate 验证失败 = 直接 fail，不自动补丁</td>
+          </tr>
+          <tr>
+            <td>好处</td>
+            <td>—</td>
+            <td>发布管线变成纯确定性流程，没有任何 AI 决策环节：deploy → check → pass/fail</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="highlight red">
+        <strong>为什么这很重要：</strong>发布管线内的自动 repair 是原架构中最大的不确定性来源。repair 可能改坏已经正确的部分、引入新 bug、拉长发布耗时。把 repair 移出发布管线后，管线变成一个纯粹的验证+部署流水线，每一步的行为都是可预测的。
+      </div>
+    </div>
+
+    <!-- ─── Section 6: Prompt Impact ─── -->
+    <div class="card">
+      <h2><span class="section-num">6</span> 对 Prompt 系统的影响</h2>
+      <p>架构改版后，你的 prompt 系统需要同步调整。变化其实是简化：</p>
+
+      <h3>可以删除的 prompt</h3>
+      <ul>
+        <li><code>RELEASE_REPAIR_PROMPT</code> — repair 不再存在于发布管线中，这个 prompt 可以完全删除</li>
+        <li><code>RELEASE_FRONTEND_CONVERSION_PROMPT</code> 中关于"verifier 无法检测 API contract"的防御性措辞 — verifier 只管 BLOCK 项，不再纠结检测方式</li>
+      </ul>
+
+      <h3>需要简化的 prompt</h3>
+      <ul>
+        <li><code>RELEASE_ROLE_PROMPT</code> — 不再需要"你的工作不是 self-certify success"这类措辞。生成侧只负责输出 artifact，验证是管线的事。可以收敛为："输出 production-ready 的 frontend + backend + SQL，确保 API contract 对齐。"</li>
+        <li><code>REPAIR_ROLE_PROMPT</code> — 只需要保留编辑态修复逻辑，删除所有 release 相关的修复策略</li>
+      </ul>
+
+      <h3>需要新增的 prompt</h3>
+      <ul>
+        <li><strong>Failure Context Prompt</strong> — 当用户从发布失败回到编辑态时，把 verifier 的 BLOCK 原因注入到编辑/repair prompt 的 context 中，让 AI 有针对性地修复</li>
+      </ul>
+    </div>
+
+    <!-- ─── Section 7: Data Model ─── -->
+    <div class="card">
+      <h2><span class="section-num">7</span> 底层数据模型（最终态）</h2>
+
+      <p>apps 表核心字段变更：</p>
+      <table class="state-table">
+        <thead>
+          <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>release_state</code></td><td>TEXT</td><td>draft / candidate / live / failed</td></tr>
+          <tr><td><code>live_version_id</code></td><td>INTEGER NULL</td><td>当前在线版本号。rollback 时指向旧版本</td></tr>
+          <tr><td><code>candidate_version_id</code></td><td>INTEGER NULL</td><td>正在验证的候选版本号。promote 后清空</td></tr>
+          <tr><td><code>last_failure_reason</code></td><td>TEXT NULL</td><td>最近一次发布失败的 BLOCK 原因 JSON</td></tr>
+          <tr><td><code>last_failure_at</code></td><td>DATETIME NULL</td><td>最近失败时间</td></tr>
+          <tr><td><code>last_promoted_at</code></td><td>DATETIME NULL</td><td>最近成功上线时间</td></tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top: 12px;">删除的旧字段：</p>
+      <ul>
+        <li><code>status</code> — 被 <code>release_state</code> 取代</li>
+        <li><code>publish_status</code> — 被 <code>release_state</code> 取代</li>
+        <li><code>app_stage</code> — 被 <code>release_state</code> + version 系统取代</li>
+        <li><code>runtime_mode</code> — 由 <code>release_state</code> 隐含推导（draft = preview, candidate/live = Docker）</li>
+      </ul>
+    </div>
+
+    <!-- ─── Section 8: Execution Plan ─── -->
+    <div class="card">
+      <h2><span class="section-num">8</span> 执行计划</h2>
+      <p>按优先级排序，每一步都可以独立上线验证：</p>
+
+      <div class="timeline">
+        <div class="tl-item done">
+          <div class="tl-dot"></div>
+          <div class="tl-week">已完成</div>
+          <div class="tl-title">引入 release_state 派生状态</div>
+          <div class="tl-desc">你已经开始了这一步</div>
+        </div>
+
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-week">WEEK 1</div>
+          <div class="tl-title">底层字段迁移</div>
+          <div class="tl-desc">写 migration 把四字段映射为 release_state + version_id，删除旧字段。同步更新所有读写这些字段的代码。</div>
+        </div>
+
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-week">WEEK 1-2</div>
+          <div class="tl-title">candidate/live 容器分离</div>
+          <div class="tl-desc">实现 deploy_candidate → health_check → promote/rollback 管线。这是核心杠杆。</div>
+        </div>
+
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-week">WEEK 2</div>
+          <div class="tl-title">Verifier 瘦身 + blocking criteria</div>
+          <div class="tl-desc">按 Section 3 的 checklist 重构 verifier，分离 BLOCK 和 WARNING。从发布管线中移除 repair 调用。</div>
+        </div>
+
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-week">WEEK 3</div>
+          <div class="tl-title">失败 UX + Failure Context Prompt</div>
+          <div class="tl-desc">实现 Section 4 的失败行动路径 UI。新增 failure context 注入到编辑态 prompt。</div>
+        </div>
+
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-week">WEEK 3</div>
+          <div class="tl-title">Prompt 系统同步</div>
+          <div class="tl-desc">删除 RELEASE_REPAIR_PROMPT，简化 RELEASE_ROLE_PROMPT，更新 REPAIR_ROLE_PROMPT 为编辑态专用。</div>
+        </div>
+
+        <div class="tl-item">
+          <div class="tl-dot"></div>
+          <div class="tl-week">WEEK 4</div>
+          <div class="tl-title">Admin/My Apps UI 更新</div>
+          <div class="tl-desc">围绕统一 release_state 重构展示层，确保前后台语义一致。</div>
+        </div>
+      </div>
+
+      <div class="highlight blue">
+        <strong>总工期约 4 周。</strong>但前两周完成后（字段迁移 + candidate/live 分离），系统已经从 3.9 分跳到约 8 分。后两周是打磨到 10 分。
+      </div>
+    </div>
+
+    <!-- ─── Summary ─── -->
+    <div class="card">
+      <h2>从 7.1 → 10 补了什么</h2>
+      <table class="state-table">
+        <thead>
+          <tr><th>缺失维度</th><th>你原方案的问题</th><th>10 分版本的做法</th><th>分数提升</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>过渡期风险</td>
+            <td>派生状态过渡，双状态并存</td>
+            <td>一步到位迁移，不做过渡</td>
+            <td>5 → 10</td>
+          </tr>
+          <tr>
+            <td>Verifier criteria</td>
+            <td>"只阻止真正不能上线的"（模糊）</td>
+            <td>6 条 BLOCK + 6 条 WARNING 具体 checklist</td>
+            <td>7 → 10</td>
+          </tr>
+          <tr>
+            <td>失败后用户路径</td>
+            <td>未覆盖</td>
+            <td>两种场景的完整行动路径 + UI 文案</td>
+            <td>0 → 10</td>
+          </tr>
+          <tr>
+            <td>Repair 定位</td>
+            <td>"减少次数"（模糊）</td>
+            <td>从发布管线完全移除，仅限编辑态</td>
+            <td>7 → 10</td>
+          </tr>
+          <tr>
+            <td>Prompt 同步</td>
+            <td>未覆盖</td>
+            <td>删除/简化/新增具体 prompt</td>
+            <td>0 → 10</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</body>
+</html>
